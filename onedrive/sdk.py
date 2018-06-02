@@ -79,7 +79,9 @@ def get_session(token: Dict = None, token_updater: Callable[[str], None] = None)
         'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
         response_mode='query'
     )
+    print('Type the following URL to your browser')
     print(authorization_url)
+    print('After you encounter an empty page, paste the URL of that page below')
     code = client.parse_request_uri_response(input('Response: '), state=state)['code']
     # Microsoft enforces the scope parameter
     session.fetch_token('https://login.microsoftonline.com/consumers/oauth2/v2.0/token', code=code, scope=session.scope)
