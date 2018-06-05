@@ -2,8 +2,8 @@
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+# the Free Software Foundation, only version 3 of the License, but not any
+# later version.
 #
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -24,7 +24,7 @@ setup(
     install_requires=['requests-oauthlib'],
     author='XU Guang-zhao',
     description='OneDrive Client with Two-way Synchronizing Feature',
-    license='AGPL-3.0',
+    license='AGPL-3.0-only',
     keywords='onedrive sync',
     url='https://github.com/gzxu/onedrive-sync-client',
     project_urls={
