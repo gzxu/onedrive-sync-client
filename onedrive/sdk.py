@@ -141,7 +141,7 @@ def download_file(session: Session, identifier: str, path: Union[str, Path], *, 
     path = Path(path)
     algorithms = {algorithm: algorithm() for algorithm in checksum}
     with path.open('wb') as file:
-        response = session.get(MSGRAPH_ENDPOINT + '/me/drive/items/' + identifier + '/content', stream=True)
+        response = session.get(MSGRAPH_ENDPOINT + '/me/drive/items/' + identifier + '/content?AVOverride=1', stream=True)
         response.raise_for_status()
         for chunk in response.iter_content():
             file.write(chunk)
