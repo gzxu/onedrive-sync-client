@@ -31,6 +31,7 @@ if sys.platform == 'linux':
     if 'ONEDRIVE_CONFIG_PATH' in os.environ:
         DATABASE_LOCATION = Path(os.environ['ONEDRIVE_CONFIG_PATH'])
     else:
+        Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local' / 'share')).mkdir(parents=True, exist_ok=True)
         DATABASE_LOCATION = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local' / 'share')) / 'onedrive.sqlite'
     XATTR_ONEDRIVE_ID = 'user.onedrive.id'
 
