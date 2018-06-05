@@ -24,7 +24,7 @@ setup(
     install_requires=['requests-oauthlib'],
     author='XU Guang-zhao',
     description='OneDrive Client with Two-way Synchronizing Feature',
-    license='AGPL-3.0-only',
+    license='AGPL-3.0',
     keywords='onedrive sync',
     url='https://github.com/gzxu/onedrive-sync-client',
     project_urls={
