@@ -17,6 +17,7 @@ import argparse
 import json
 import logging
 from pathlib import Path
+from requests.exceptions import HTTPError
 
 from .model import basic_operation
 from .algorithms import get_change_set, check_same_node_operations, mark_dependencies, topological_sort, field_test
@@ -142,4 +143,8 @@ def main():
     if get_config('local_path') is None:
         parser.error('Use --set-location to set destination path first')
 
-    return sync()
+    try:
+        return sync()
+    except HTTPError as error:
+        print(error.response.headers, error.response.content)
+        raise
