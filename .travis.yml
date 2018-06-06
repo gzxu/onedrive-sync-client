@@ -1,0 +1,18 @@
+language: python
+python:
+  - "3.5"
+
+install:
+  - true
+
+script:
+  - true
+
+deploy:
+  provider: pypi
+  user: $PYPI_USERNAME
+  password: $PYPI_PASSWORD
+  on:
+    tags: true
+    python: "3.5"
+  distributions: "sdist bdist_wheel"
