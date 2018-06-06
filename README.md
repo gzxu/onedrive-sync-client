@@ -10,6 +10,8 @@ To try it out, simply type this into your terminal (supposing you are using GNU/
 
 ```
 pip install --user onedrive-sync-client # Install
+# If you want to use the latest snapshot use the following line instead
+# pip install --user https://github.com/gzxu/onedrive-sync-client/archive/master.zip
 onedrive --set-location ~/OneDrive      # Config
 onedrive                                # Sync!
 ```
