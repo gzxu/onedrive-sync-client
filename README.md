@@ -102,6 +102,8 @@ As OneDrive supports partial downloading, a download manager is needed especiall
 ## Future works
 
 - [ ] Solve the aforementioned bug and revise the algorithm to cover the aforementioned situation
+- [ ] Add option to force override local tree with the cloud one or vice versa
+- [ ] Use [`st_mtime_ns`](http://man7.org/linux/man-pages/man7/inode.7.html) to detect changes instead of checksums for faster local tree constructing and [OneDrive for Business and SharePoint Server 2016](https://developer.microsoft.com/en-us/graph/docs/api-reference/v1.0/resources/hashes) support
 - [ ] Enable Windows and/or macOS support (easy but probably unnecessary job)
 - [ ] Come up with a better model describing this problem and revise the algorithm based on this
 - [ ] Replenish the documentation in comments
