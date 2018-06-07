@@ -14,12 +14,23 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from pathlib import Path
-
 from setuptools import setup, find_packages
+import subprocess
+
+
+def call(*args, **kwargs):
+    return ' '.join(subprocess.run(args, stdout=subprocess.PIPE, universal_newlines=True, check=True, **kwargs).stdout.split())
+
+
+def get_git_tag():
+    try:
+        return call('git', 'name-rev', '--tags', '--name-only', call('git', 'rev-list', '--tags', '--max-count=1'))
+    except:
+        return 'unstable'
 
 setup(
     name='onedrive-sync-client',
-    version='0.1.4',
+    version=get_git_tag(),
     packages=find_packages(),
     install_requires=['requests-oauthlib'],
     author='XU Guang-zhao',
