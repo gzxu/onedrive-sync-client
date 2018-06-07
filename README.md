@@ -89,7 +89,7 @@ OneDrive provides an API to [dump the whole tree](https://developer.microsoft.co
 
 ### Batch requests
 
-A request agent can be used to temporarily store requests and use the [batch API](https://developer.microsoft.com/en-us/graph/docs/concepts/json_batching) to save traffic, before any force flushing. Also, some HTTP library supports HTTP 2.0 to additionally save traffic. However, 
+A request agent can be used to temporarily store requests and use the [batch API](https://developer.microsoft.com/en-us/graph/docs/concepts/json_batching) to save traffic, before any force flushing. Also, some HTTP library supports HTTP 2.0 to additionally save traffic. However, this involves a more complex algorithm.
 
 ### File downloading and uploading
 
@@ -119,3 +119,7 @@ As OneDrive supports partial downloading, a download manager is needed especiall
 - [ ] Introduce a logging framework
 - [ ] GUI with neat design
 - [ ] Port to C++ when possible
+
+## License
+
+This project is licensed under the [GNU Affero General Public License](./LICENSE.md).
