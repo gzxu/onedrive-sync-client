@@ -190,7 +190,7 @@ def retrieve_delta(session: Session, root_id: str = None) -> Tree:
             raise Exception('Unexpected response')
 
     tree = update_delta_tree(items.values(), root_id)
-    set_config('delta_link', new_delta_link)
+    # set_config('delta_link', new_delta_link)  # Force set it to None for bugs TODO
     return tree
 
 
