@@ -1,6 +1,7 @@
-# Two-way OneDrive Synchronization Client
-
+[![Build Status](https://travis-ci.com/gzxu/onedrive-sync-client.svg?branch=master)](https://travis-ci.com/gzxu/onedrive-sync-client)
 [![](https://img.shields.io/pypi/v/onedrive-sync-client.svg)](https://pypi.org/project/onedrive-sync-client/)
+
+# Two-way OneDrive Synchronization Client
 
 *DISCLAIMER: This utility is in its early stage. Although it is designed to fail as soon as possible when conflicts are detected in order to avoid data loss, it is not guaranteed that your data is absolutely safe. Run it in a testing environment before you know what is going on*
 
