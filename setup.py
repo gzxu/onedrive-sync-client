@@ -28,11 +28,12 @@ def get_git_tag():
     except:
         return 'unstable'
 
+
 setup(
     name='onedrive-sync-client',
     version=get_git_tag(),
     packages=find_packages(),
-    install_requires=['requests-oauthlib'],
+    install_requires=Path('requirements.txt').read_text(),
     author='XU Guang-zhao',
     description='OneDrive Client with Two-way Synchronizing Feature',
     license='AGPL-3.0-only',
