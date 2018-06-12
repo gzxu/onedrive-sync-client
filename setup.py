@@ -46,7 +46,7 @@ setup(
     python_requires='>=3.5',
     entry_points={
         'console_scripts': [
-            'onedrive = onedrive.main:main'
+            'onedrive = onedrive.cli:main'
         ]
     },
     long_description=Path('README.md').read_text(),

@@ -13,17 +13,15 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import argparse
 import json
 import logging
-from pathlib import Path
-from requests.exceptions import HTTPError
 
-from .model import basic_operation
+from .algorithms import cancel_duplication, optimize_deletion
 from .algorithms import get_change_set, check_same_node_operations, mark_dependencies, topological_sort, field_test
-from .local import get_local_tree, local_apply_operation, convert_temp_id, register_real_id
-from .sdk import get_session, retrieve_delta, cloud_apply_operation
 from .database import get_config, set_config, load_saved_tree, save_tree
+from .local import get_local_tree, local_apply_operation, convert_temp_id, register_real_id
+from .model import basic_operation
+from .sdk import get_session, retrieve_delta, cloud_apply_operation
 
 
 def sync() -> int:
@@ -55,6 +53,9 @@ def sync() -> int:
 
     cloud_script = topological_sort(cloud_changes, cloud_dependencies)
     local_script = topological_sort(local_changes, local_dependencies)
+
+    cancel_duplication(cloud_script, local_script)
+    optimize_deletion(local_script, saved_tree)
 
     if field_test(saved_tree, cloud_script) != cloud_tree:
         raise AssertionError()
@@ -106,45 +107,3 @@ def sync() -> int:
 
     save_tree(cloud_tree)
     return 0
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.formatter_class = argparse.RawDescriptionHelpFormatter
-    parser.add_argument('--set-location', metavar='DIRECTORY', help='Specify where to save your files')
-    parser.add_argument('--set-root-id', metavar='ROOT_ID', help='''
-    [DO NOT USE IF YOU DO NOT KNOW WHAT THIS MEANS] Specify the root id of your sub-folder in OneDrive
-    ''')
-    parser.description = '''Run this program with no arguments after setting location initiates a synchronization'''
-    parser.epilog = '''
-    Environment variables:
-        ONEDRIVE_CONFIG_PATH: Path to the SQLite database storing configurations (Default: $XDG_DATA_DIR/onedrive.sqlite)
-    '''
-
-    args = parser.parse_args()
-
-    logging.getLogger().setLevel(logging.INFO)
-
-    if args.set_root_id is not None and args.set_location is None:
-        parser.error('Cannot reset root id now')
-    if args.set_location is not None:
-        path = Path(args.set_location)
-        if not path.is_dir():
-            parser.error('The destination path should be a directory')
-        if list(path.iterdir()):
-            parser.error('The destination should be empty')
-        set_config('local_path', args.set_location)
-        logging.info('Destination path set successfully')
-        if args.set_root_id is not None:
-            set_config('root_id', args.set_root_id)
-            logging.info('Root id set successfully')
-        return 0
-
-    if get_config('local_path') is None:
-        parser.error('Use --set-location to set destination path first')
-
-    try:
-        return sync()
-    except HTTPError as error:
-        print(error.response.headers, error.response.content)
-        raise

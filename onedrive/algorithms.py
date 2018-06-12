@@ -328,3 +328,17 @@ def optimize_cloud_deletion(tree: Tree, script: Sequence[Operation]) -> Sequence
                     continue
         result.append(line)
     return result
+
+
+def optimize_deletion(local_script: Sequence[Operation], saved_tree: Tree) -> None:
+    _ = local_script, saved_tree
+    import logging
+    logging.warning('Stub!')
+    pass
+
+
+def cancel_duplication(cloud_script: Sequence[Operation], local_script: Sequence[Operation]):
+    _ = cloud_script, local_script
+    import logging
+    logging.warning('Stub!')
+    pass
