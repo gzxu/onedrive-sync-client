@@ -147,7 +147,7 @@ def file_from_item(item):
         item['size'],
         item['eTag'],
         item.get('cTag', None),
-        item['file']['hashes'] if 'hashes' in item['file'] else None
+        item['file']['hashes'] if 'hashes' in item['file'] else {}
     )
 
 
