@@ -14,22 +14,53 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 import copy
+import hashlib
 import itertools
+import zlib
 from collections import defaultdict
 from functools import singledispatch
-from typing import Set, Tuple, Sequence, Optional
+from typing import Set, Tuple, Sequence, Optional, Callable, Mapping
+from pathlib import Path
 
-from .model import Operation, AddFile, DelFile, ModifyFile, RenameMoveFile, AddDir, DelDir, RenameMoveDir
-from .model import Tree, check_operation, basic_operation
+from .dataclass import DataClass, Field
+from .model import Operation, AddFile, DelFile, ModifyFile, RenameMoveFile, AddDir, DelDir, RenameMoveDir, CloudFile
+from .model import Tree, check_operation, basic_operation, File, LocalFile
 
 
-def get_change_set(before: Tree, after: Tree) -> Set[Operation]:
+def compare_file_by_cTag(before: CloudFile, after: CloudFile) -> bool:
+    return before.cTag == after.cTag
+
+
+def compare_file_by_mtime(last_sync_timestamp: int) -> Callable[[File, LocalFile], bool]:
+    def _(before: File, after: LocalFile) -> bool:
+        return after.st_mtime_ns <= last_sync_timestamp
+
+    return _
+
+
+def compare_file_by_hashes(id_to_path: Mapping[str, Path]) -> Callable[[LocalFile, CloudFile], bool]:
+    def _(before: LocalFile, after: CloudFile) -> bool:
+        if before.size != after.size:
+            return False
+        hashes = after.hashes if after.hashes is not None else {}
+        for algorithm in hashes:
+            engine = HASH_ENGINES[algorithm]()
+            engine.send(None)
+            engine.send(id_to_path[before.id].read_bytes())
+            if engine.send(None) != after.hashes[algorithm].upper():
+                return False
+        return True
+
+    return _
+
+
+def get_change_set(before: Tree, after: Tree, file_comparison: Callable[[File, File], bool]) -> Set[Operation]:
     change_set = set()
 
     for file_id in before.files.keys() | after.files.keys():
         if file_id not in before.files:
             file = after.files[file_id]
-            change_set.add(AddFile(file.parent, file_id, file.name, file.checksum))
+            change_set.add(AddFile(file.parent, file_id, file.name, file.size))
             continue
         if file_id not in after.files:
             change_set.add(DelFile(file_id))
@@ -44,8 +75,9 @@ def get_change_set(before: Tree, after: Tree) -> Set[Operation]:
             new_name = after_file.name
         if destination_id or new_name:
             change_set.add(RenameMoveFile(file_id, new_name, destination_id))
-        if before_file.checksum != after_file.checksum:
-            change_set.add(ModifyFile(file_id, after_file.checksum))
+
+        if not file_comparison(before_file, after_file):
+            change_set.add(ModifyFile(file_id, after_file.size))
 
     for dir_id in before.dirs.keys() | after.dirs.keys():
         if dir_id not in before.dirs:
@@ -118,43 +150,17 @@ def check_same_node_operations(cloud_changes: Set[Operation], local_changes: Set
                     raise Exception('Ambiguous operations of moving one directory twice')
 
 
-class Condition:
+class Condition(DataClass):
     pass
 
 
 class DirectoryExists(Condition):
-    def __init__(self, id: str):
-        self._id = id
-
-    @property
-    def id(self) -> str:
-        return self._id
-
-    def __eq__(self, other) -> bool:
-        return type(other) is DirectoryExists and self._id == other._id
-
-    def __hash__(self) -> int:
-        return hash((DirectoryExists, self._id))
+    id = Field(str, True, None)
 
 
 class NameReleased(Condition):
-    def __init__(self, parent_id: str, name: str):
-        self._parent_id = parent_id
-        self._name = name
-
-    @property
-    def parent_id(self) -> str:
-        return self._parent_id
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    def __eq__(self, other) -> bool:
-        return type(other) is NameReleased and self._parent_id == other._parent_id and self._name == other._name
-
-    def __hash__(self) -> int:
-        return hash((NameReleased, self._parent_id, self._name))
+    parent_id = Field(str, True, None)
+    name = Field(str, True, None)
 
 
 @singledispatch
@@ -330,15 +336,28 @@ def optimize_cloud_deletion(tree: Tree, script: Sequence[Operation]) -> Sequence
     return result
 
 
-def optimize_deletion(local_script: Sequence[Operation], saved_tree: Tree) -> None:
-    _ = local_script, saved_tree
-    import logging
-    logging.warning('Stub!')
-    pass
+def _sha1():
+    engine = hashlib.sha1()
+    while True:
+        chunk = yield
+        if chunk is None:
+            break
+        engine.update(chunk)
+    yield engine.hexdigest().upper()
 
 
-def cancel_duplication(cloud_script: Sequence[Operation], local_script: Sequence[Operation]):
-    _ = cloud_script, local_script
-    import logging
-    logging.warning('Stub!')
-    pass
+def _crc32():
+    engine = 0
+    while True:
+        chunk = yield
+        if chunk is None:
+            break
+        engine = zlib.crc32(chunk, engine)
+    yield (engine & 0xffffffff).to_bytes(4, 'little').hex().upper()
+
+
+HASH_ENGINES = {
+    'sha1Hash': _sha1,
+    'crc32Hash': _crc32,
+    # quickXOR hashes?
+}

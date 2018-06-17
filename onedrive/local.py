@@ -13,55 +13,23 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import errno
-import hashlib
-import os
-import sys
 from collections import defaultdict
-from functools import singledispatch
 from pathlib import Path
-from typing import Iterator, Tuple, Set, Optional, MutableMapping, Mapping
+from typing import Iterator, Tuple, Set, MutableMapping, Mapping
 
-from requests import Session
-
-from .model import Tree, File, Directory, Operation, DelFile, ModifyFile, RenameMoveFile, DelDir, RenameMoveDir
-from .model import basic_operation, AddFile, AddDir
-
-if sys.platform == 'linux':
-    if 'ONEDRIVE_CONFIG_PATH' in os.environ:
-        DATABASE_LOCATION = Path(os.environ['ONEDRIVE_CONFIG_PATH'])
-    else:
-        Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local' / 'share')).mkdir(parents=True, exist_ok=True)
-        DATABASE_LOCATION = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local' / 'share')) / 'onedrive.sqlite'
-    XATTR_ONEDRIVE_ID = 'user.onedrive.id'
+from .database import CONFIG
+from .model import AddFile, AddDir, CloudFile, AddCloudFile
+from .model import Tree, Directory, Operation, RenameMoveFile, RenameMoveDir, LocalFile
+from .platform import load_id_from_metadata
 
 
-    def save_id_in_metadata(identifier: str, path):
-        path = Path(path)
-        os.setxattr(str(path), XATTR_ONEDRIVE_ID, identifier.encode())
-
-
-    def load_id_from_metadata(path) -> Optional[str]:
-        path = Path(path)
-        try:
-            return os.getxattr(str(path), XATTR_ONEDRIVE_ID).decode()
-        except OSError as error:
-            if error.errno != errno.ENODATA:
-                raise
-            else:
-                return None
-else:
-    DATABASE_LOCATION = Path(os.environ.get('LOCALAPPDATA', Path.home() / 'AppData' / 'Local')) / 'onedrive.sqlite'
-    raise Exception('Operating system currently unsupported ' + sys.platform)
-
-
-def _parse_local_tree(path, root_id) -> Tuple[
+def _parse_local_tree(path) -> Tuple[
     Tree,
     MutableMapping[str, str],
     MutableMapping[str, Set[str]],
     MutableMapping[str, Path]
 ]:
-    tree = Tree(root_id)
+    tree = Tree(CONFIG.root_id)
     counter_to_id = {}
     id_to_counter = defaultdict(set)
     counter_to_path = {}
@@ -85,12 +53,13 @@ def _parse_local_tree(path, root_id) -> Tuple[
 
             counter_to_path[temp_id] = child
             if child.is_dir():
-                basic_operation(AddDir(parent_id, temp_id, child.name), tree)
+                tree.dirs[temp_id] = Directory(temp_id, child.name, parent_id)
+                tree.dirs[parent_id].dirs.add(temp_id)
                 _append_children(temp_id, counter, child)
             elif child.is_file():
-                sha1 = hashlib.sha1()
-                sha1.update(child.read_bytes())
-                basic_operation(AddFile(parent_id, temp_id, child.name, sha1.hexdigest().upper()), tree)
+                stat = child.stat()
+                tree.files[temp_id] = LocalFile(temp_id, child.name, parent_id, stat.st_size, stat.st_mtime_ns)
+                tree.dirs[parent_id].files.add(temp_id)
 
     _append_children(tree.root_id, _counter(), path)
     return tree, counter_to_id, id_to_counter, counter_to_path
@@ -120,7 +89,7 @@ def _normalize_local_tree(
                 def file_compare(temp_file_id: str):
                     temp_file = local_tree.files[temp_file_id]
                     return (
-                        temp_file.checksum == cloud_file.checksum,
+                        temp_file.size == cloud_file.size,
                         temp_file.parent == cloud_file.parent,
                         temp_file.name == cloud_file.name
                     )
@@ -151,16 +120,16 @@ def _normalize_local_tree(
     tree = Tree(local_tree.root_id)
     for file_id, file in local_tree.files.items():
         identifier = counter_to_id.get(file_id, file_id)
-        new_file = File(identifier, file.name, file.checksum)
-        new_file.parent = counter_to_id.get(file.parent, file.parent)
-        tree.files[identifier] = new_file
+        tree.files[identifier] = LocalFile(identifier, file.name, counter_to_id.get(
+            file.parent, file.parent
+        ), file.size, file.st_mtime_ns)
     for dir_id, directory in local_tree.dirs.items():
         if dir_id == tree.root_id:
             continue
         identifier = counter_to_id.get(dir_id, dir_id)
-        new_dir = Directory(identifier, directory.name)
-        new_dir.parent = counter_to_id.get(directory.parent, directory.parent)
-        tree.dirs[identifier] = new_dir
+        tree.dirs[identifier] = Directory(identifier, directory.name, counter_to_id.get(
+            directory.parent, directory.parent
+        ))
 
     tree.reconstruct_by_parents()
 
@@ -171,88 +140,17 @@ def _normalize_local_tree(
     return tree, id_to_path
 
 
-def get_local_tree(path, root_id: str, cloud_tree: Tree) -> Tuple[Tree, MutableMapping[str, Path]]:
+def get_local_tree(path, cloud_tree: Tree) -> Tuple[Tree, MutableMapping[str, Path]]:
     path = Path(path)
-    tree, counter_to_id, id_to_counter, counter_to_path = _parse_local_tree(path, root_id)
+    tree, counter_to_id, id_to_counter, counter_to_path = _parse_local_tree(path)
     tree, id_to_path = _normalize_local_tree(tree, counter_to_id, id_to_counter, counter_to_path, cloud_tree)
-    id_to_path[root_id] = path
+    id_to_path[CONFIG.root_id] = path
     return tree, id_to_path
-
-
-@singledispatch
-def local_apply_operation(args: Operation, tree: Tree, id_to_path: MutableMapping[str, Path], session: Session) -> None:
-    raise NotImplementedError()
-
-
-@local_apply_operation.register(AddFile)
-def _(args: AddFile, tree: Tree, id_to_path: MutableMapping[str, Path], session: Session) -> None:
-    destination = id_to_path[args.parent_id] / args.name
-    from onedrive.sdk import download_file
-    download_file(session, args.child_id, destination, checksum={hashlib.sha1: args.checksum})
-    save_id_in_metadata(args.child_id, destination)
-    id_to_path[args.child_id] = destination
-
-
-@local_apply_operation.register(DelFile)
-def _(args: DelFile, tree: Tree, id_to_path: MutableMapping[str, Path], session: Session) -> None:
-    id_to_path[args.id].unlink()
-    del id_to_path[args.id]
-
-
-@local_apply_operation.register(ModifyFile)
-def _(args: ModifyFile, tree: Tree, id_to_path: MutableMapping[str, Path], session: Session) -> None:
-    from onedrive.sdk import download_file
-    download_file(session, args.id, id_to_path[args.id], checksum={hashlib.sha1: args.checksum})
-
-
-@local_apply_operation.register(RenameMoveFile)
-def _(args: RenameMoveFile, tree: Tree, id_to_path: MutableMapping[str, Path], session: Session) -> None:
-    file = tree.files[args.id]
-    destination_id = args.destination_id if args.destination_id is not None else file.parent
-    name = args.name if args.name is not None else file.name
-    destination = id_to_path[destination_id] / name
-    id_to_path[args.id].rename(destination)
-    id_to_path[args.id] = destination
-
-
-@local_apply_operation.register(AddDir)
-def _(args: AddDir, tree: Tree, id_to_path: MutableMapping[str, Path], session: Session) -> None:
-    destination = id_to_path[args.parent_id] / args.name
-    destination.mkdir()
-    save_id_in_metadata(args.child_id, destination)
-    id_to_path[args.child_id] = destination
-
-
-@local_apply_operation.register(DelDir)
-def _(args: DelDir, tree: Tree, id_to_path: MutableMapping[str, Path], session: Session) -> None:
-    id_to_path[args.id].rmdir()
-    del id_to_path[args.id]
-
-
-@local_apply_operation.register(RenameMoveDir)
-def _(args: RenameMoveDir, tree: Tree, id_to_path: MutableMapping[str, Path], session: Session) -> None:
-    directory = tree.dirs[args.id]
-    destination_id = args.destination_id if args.destination_id is not None else directory.parent
-    name = args.name if args.name is not None else directory.name
-    destination = id_to_path[destination_id] / name
-    current_path = id_to_path[args.id]
-    current_path.rename(destination)
-    id_to_path[args.id] = destination
-
-    def _migrate(sub_dir_id: str):
-        sub_dir = tree.dirs[sub_dir_id]
-        for child in sub_dir.files:
-            id_to_path[child] = destination / id_to_path[child].relative_to(current_path)
-        for child in sub_dir.dirs:
-            id_to_path[child] = destination / id_to_path[child].relative_to(current_path)
-            _migrate(child)
-
-    _migrate(args.id)
 
 
 def convert_temp_id(real_id: Mapping[str, str], args: Operation) -> Operation:
     if isinstance(args, AddFile):
-        return AddFile(real_id.get(args.parent_id, args.parent_id), args.child_id, args.name, args.checksum)
+        return AddFile(real_id.get(args.parent_id, args.parent_id), args.child_id, args.name, args.size)
     if isinstance(args, AddDir):
         return AddDir(real_id.get(args.parent_id, args.parent_id), args.child_id, args.name)
     if isinstance(args, (RenameMoveFile, RenameMoveDir)):
@@ -260,13 +158,13 @@ def convert_temp_id(real_id: Mapping[str, str], args: Operation) -> Operation:
     return args
 
 
-def register_real_id(new_id: str, args: Operation, real_id: MutableMapping[str, str]) -> Operation:
+def register_real_id(new_file: CloudFile, args: Operation, real_id: MutableMapping[str, str]) -> Operation:
     if not isinstance(args, (AddFile, AddDir)):
         return args
-    if new_id is None:
+    if new_file is None:
         raise AssertionError()
-    real_id[args.child_id] = new_id
+    real_id[args.child_id] = new_file.id
     if isinstance(args, AddFile):
-        return AddFile(args.parent_id, new_id, args.name, args.checksum)
+        return AddCloudFile(args.parent_id, new_file.id, args.name, args.size, new_file.eTag, new_file.cTag)
     if isinstance(args, AddDir):
-        return AddDir(args.parent_id, new_id, args.name)
+        return AddDir(args.parent_id, new_file.id, args.name)

@@ -12,123 +12,224 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-
+import itertools
 import sqlite3
-from typing import Sequence, Dict, Optional
+from collections import OrderedDict
+from enum import IntEnum
+from typing import Iterable
 
-from .model import Tree, File, Directory, basic_operation, DelDir
-from .local import DATABASE_LOCATION
+from .model import CloudFile
+from .dao import Entity, Column, DAO
+from .model import Tree, Directory
+from .platform import DATABASE_LOCATION
+
+
+class TreeType(IntEnum):
+    SAVED = 1
+    DELTA = 2
+
 
 CONNECTION = sqlite3.connect(str(DATABASE_LOCATION))
-CONNECTION.execute('create table if not exists config (key text primary key, value text)')
-# Remember to add eTag information TODO
-CONNECTION.execute('create table if not exists file_nodes (id text primary key, name text, checksum text, parent text)')
-CONNECTION.execute('create table if not exists dir_nodes (id text primary key, name text, parent text)')
-CONNECTION.execute('create table if not exists last_delta_files '
-                   '(id text primary key, name text, checksum text, parent text)')
-CONNECTION.execute('create table if not exists last_delta_dirs (id text primary key, name text, parent text)')
 
 
-def set_config(key: str, value: str) -> None:
-    with CONNECTION:
-        CONNECTION.execute('insert or replace into config (key, value) values (:key, :value)', {
-            'key': key,
-            'value': value
-        })
+@Entity.connection(CONNECTION)
+class ConfigEntity(Entity):
+    TABLE_NAME = 'config'
+    key = Column('text', True)
+    value = Column('text', False)
 
 
-def get_config(key: str, default: str = None) -> Optional[str]:
-    row = CONNECTION.execute('select value from config where key=:key', {
-        'key': key
-    }).fetchone()
-    return row[0] if row is not None else default
+@Entity.connection(CONNECTION)
+class FileEntity(Entity):
+    TABLE_NAME = 'file_nodes'
+    tree = Column('integer', True)
+    id = Column('text', True)
+    name = Column('text', False)
+    size = Column('integer', False)
+    eTag = Column('text', False)
+    cTag = Column('text', False)
+    parent = Column('text', False)
 
 
-def _save_tree(tree: Tree, root_id_key: str, files_table: str, dirs_table: str) -> None:
-    with CONNECTION:
-        CONNECTION.execute('insert or replace into config (key, value) values (:key, :value)', {
-            'key': root_id_key,
-            'value': tree.root_id
-        })
-        CONNECTION.execute('delete from ' + files_table)
-        CONNECTION.execute('delete from ' + dirs_table)
-        CONNECTION.executemany(
-            'insert into ' + files_table + ' (id, name, checksum, parent) values (:id, :name, :checksum, :parent)', [{
-                'id': node.id,
-                'name': node.name,
-                'checksum': node.checksum,
-                'parent': node.parent
-            } for node in tree.files.values()]
-        )
-        CONNECTION.executemany('insert into ' + dirs_table + ' (id, name, parent) values (:id, :name, :parent)', [{
-            'id': node.id,
-            'name': node.name,
-            'parent': node.parent
-        } for node in tree.dirs.values() if node.id != tree.root_id])
+@Entity.connection(CONNECTION)
+class DirEntity(Entity):
+    TABLE_NAME = 'dir_nodes'
+    tree = Column('integer', True)
+    id = Column('text', True)
+    name = Column('text', False)
+    parent = Column('text', False)
 
 
-def _load_tree(root_id_key: str, files_table: str, dirs_table: str) -> Tree:
-    tree = Tree(get_config(root_id_key))
-    for row in CONNECTION.execute('select id, name, checksum, parent from ' + files_table):
-        file = File(row[0], row[1], row[2])
-        file.parent = row[3]
-        tree.files[row[0]] = file
-    for row in CONNECTION.execute('select id, name, parent from ' + dirs_table):
-        directory = Directory(row[0], row[1])
-        directory.parent = row[2]
-        tree.dirs[row[0]] = directory
-    tree.reconstruct_by_parents()
-    return tree
+@Entity.connection(CONNECTION)
+class HashEntity(Entity):
+    TABLE_NAME = 'hashes'
+    id = Column('text', True)
+    type = Column('text', True)
+    value = Column('text', False)
 
 
-def load_saved_tree() -> Tree:
-    return _load_tree('root_id', 'file_nodes', 'dir_nodes')
+@DAO.entity(ConfigEntity)
+class ConfigDAO(DAO):
+    @DAO.query('select * from "{table_name}" where "key" = :key', scalar=True)
+    def get_value(self, key: str): pass
+
+    @DAO.insert
+    def populate(self, items): pass
+
+    @DAO.delete
+    def del_value(self, item): pass
 
 
-def save_tree(tree: Tree) -> None:
-    _save_tree(tree, 'root_id', 'file_nodes', 'dir_nodes')
+@DAO.entity(FileEntity)
+class FilesDAO(DAO):
+    @DAO.query('select * from "{table_name}" where "tree" = :tree')
+    def get_all_from_tree(self, tree: TreeType) -> Iterable[FileEntity]: pass
+
+    @DAO.insert
+    def populate(self, items): pass
+
+    @DAO.query('delete from "{table_name}" where "tree" = :tree', scalar=True)
+    def clear_tree(self, tree: TreeType): pass
+
+    @DAO.query('delete from "{table_name}"', scalar=True)
+    def clear(self): pass
 
 
-def update_delta_tree(delta: Sequence[Dict], root_id: str) -> Tree:
-    delta_link = get_config('delta_link', None)
-    if delta_link is None:
-        tree = Tree(root_id)
-    else:
-        tree = _load_tree('root_id', 'last_delta_files', 'last_delta_dirs')
+@DAO.entity(DirEntity)
+class DirsDAO(DAO):
+    @DAO.query('select * from "{table_name}" where "tree" = :tree')
+    def get_all_from_tree(self, tree: TreeType) -> Iterable[DirEntity]: pass
 
-    deleted = []
-    for entry in delta:
-        identifier = entry['id']
-        if identifier == tree.root_id:
-            continue
-        if 'deleted' in entry:
-            if identifier in tree.files:
-                del tree.files[identifier]
+    @DAO.insert
+    def populate(self, items): pass
+
+    @DAO.query('delete from "{table_name}" where "tree" = :tree', scalar=True)
+    def clear_tree(self, tree: TreeType): pass
+
+    @DAO.query('delete from "{table_name}"', scalar=True)
+    def clear(self): pass
+
+
+@DAO.entity(HashEntity)
+class HashDAO(DAO):
+    @DAO.query('select * from "{table_name}" where "id" = :id')
+    def get_hashes_by_id(self, id: str) -> Iterable[HashEntity]: pass
+
+    @DAO.insert
+    def populate(self, items): pass
+
+    @DAO.query('delete from "{table_name}"', scalar=True)
+    def clear(self): pass
+
+
+class Config:
+    def __init__(self):
+        self._dao = ConfigDAO()
+
+    def __getitem__(self, item: str) -> str:
+        entity = self._dao.get_value(item)
+        if entity is None:
+            raise IndexError()
+        else:
+            return entity.value
+
+    def __setitem__(self, key: str, value: str) -> None:
+        self._dao.populate((ConfigEntity(key, value),))
+
+    def __delitem__(self, item: str) -> None:
+        self._dao.del_value(ConfigEntity(item, None))
+
+    def __getattr__(self, item: str) -> str:
+        try:
+            return self.__getitem__(item)
+        except IndexError:
+            raise AttributeError()
+
+    def __setattr__(self, key: str, value: str) -> None:
+        if key == '_dao':
+            object.__setattr__(self, key, value)
+            return
+        with self._dao.ENTITY.CONNECTION:
+            self.__setitem__(key, value)
+
+    def __delattr__(self, item: str) -> None:
+        with self._dao.ENTITY.CONNECTION:
+            self.__delitem__(item)
+
+
+CONFIG = Config()
+# if int(getattr(CONFIG, 'db_version', 0)) < 1:
+#     logging.warning('The database is outdated, please remove ' + str(DATABASE_LOCATION) + ' and rerun this program')
+#     sys.exit(-1)
+CONFIG.db_version = 1
+
+
+class TreeAdapter:
+    def __init__(self):
+        self._files_dao = FilesDAO()
+        self._hash_dao = HashDAO()
+        self._dirs_dao = DirsDAO()
+
+    def save_tree(self, tree: Tree, tree_type: TreeType):
+        files = tree.files.values()
+        dirs = tree.dirs.values()
+
+        self._files_dao.clear_tree(tree_type)
+        self._files_dao.populate(FileEntity(
+            tree_type,
+            file.id,
+            file.name,
+            file.size,
+            file.eTag,
+            file.cTag,
+            file.parent
+        ) for file in files)
+        if tree_type == TreeType.DELTA:  # Hashes is not required to be saved for next comparison
+            self._hash_dao.clear()
+            self._hash_dao.populate(itertools.chain.from_iterable((HashEntity(
+                file.id,
+                type_,
+                value
+            ) for type_, value in file.hashes.items()) for file in files))
+        self._dirs_dao.clear_tree(tree_type)
+        self._dirs_dao.populate(DirEntity(
+            tree_type,
+            directory.id,
+            directory.name,
+            directory.parent
+        ) for directory in dirs)
+
+    def load_tree(self, tree_type: TreeType) -> Tree:
+        files = OrderedDict()
+        dirs = OrderedDict()
+        for entity in self._files_dao.get_all_from_tree(tree_type):
+            if tree_type == TreeType.DELTA:
+                hashes = self._hash_dao.get_hashes_by_id(entity.id)
             else:
-                deleted.append(identifier)
-        if 'file' in entry:
-            if 'hashes' not in entry['file']:
-                continue  # OneNote files have no hash. This is dangerous as normal files also have no hash on creation
-            file = File(identifier, entry['name'], entry['file']['hashes']['sha1Hash'])
-            file.parent = entry['parentReference']['id']
-            tree.files[identifier] = file
-        elif 'folder' in entry:
-            directory = Directory(identifier, entry['name'])
-            directory.parent = entry['parentReference']['id']
-            tree.dirs[identifier] = directory
+                hashes = []
+            files[entity.id] = CloudFile(
+                entity.id,
+                entity.name,
+                entity.parent,
+                entity.size,
+                entity.eTag,
+                entity.cTag,
+                {hash_entity.type: hash_entity.value for hash_entity in hashes}
+            )
+        for entity in self._dirs_dao.get_all_from_tree(tree_type):
+            dirs[entity.id] = Directory(entity.id, entity.name, entity.parent)
 
-    tree.reconstruct_by_parents()
+        tree = Tree(CONFIG.root_id)
+        tree.files.update(files)
+        tree.dirs.update(dirs)
+        tree.reconstruct_by_parents()
 
-    while True:
-        count = 0
-        for identifier in list(deleted):
-            current = tree.dirs[identifier]
-            if not current.dirs and not current.files:
-                deleted.remove(identifier)
-                basic_operation(DelDir(identifier), tree)
-                count += 1
-        if count == 0:
-            break
+        return tree
 
-    _save_tree(tree, 'root_id', 'last_delta_files', 'last_delta_dirs')
-    return tree
+    def clear_all(self):
+        self._files_dao.clear()
+        self._dirs_dao.clear()
+        self._hash_dao.clear()
+
+
+TREE_ADAPTER = TreeAdapter()

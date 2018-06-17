@@ -14,82 +14,35 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from functools import singledispatch
-from typing import Set, MutableMapping, Dict, Optional
+from typing import Dict, Set
+
+from .dataclass import Field, DataClass
 
 
-class Node:
-    def __init__(self, identifier: str, name: str):
-        self._id = identifier
-        self._name = name
-        self._parent = None
-
-    @property
-    def id(self) -> str:
-        return self._id
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @name.setter
-    def name(self, value: str):
-        self._name = value
-
-    @property
-    def parent(self) -> str:
-        return self._parent
-
-    @parent.setter
-    def parent(self, value: str):
-        self._parent = value
-
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, Node):
-            return False
-        return self._id == other._id and self._name == other._name and self._parent == other._parent
+class Node(DataClass):
+    id = Field(str, True, None)
+    name = Field(str, False, None)
+    parent = Field(str, False, None)
 
 
 class File(Node):
-    def __init__(self, identifier: str, name: str, checksum: str):
-        super().__init__(identifier, name)
-        self._checksum = checksum
+    size = Field(int, False, 0)
+    pass
 
-    @property
-    def checksum(self) -> str:
-        return self._checksum
 
-    @checksum.setter
-    def checksum(self, value: str):
-        self._checksum = value
+class CloudFile(File):
+    eTag = Field(str, False, None)
+    cTag = Field(str, False, None)
+    hashes = Field(dict, True, {})
 
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, File):
-            return False
-        if not super().__eq__(other):
-            return False
-        return self._checksum == other._checksum
+
+class LocalFile(File):
+    st_mtime_ns = Field(int, False, 0)
 
 
 class Directory(Node):
-    def __init__(self, identifier: str, name: Optional[str]):
-        super().__init__(identifier, name)
-        self._files = set()
-        self._dirs = set()
-
-    @property
-    def files(self) -> Set[str]:
-        return self._files
-
-    @property
-    def dirs(self) -> Set[str]:
-        return self._dirs
-
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, Directory):
-            return False
-        if not super().__eq__(other):
-            return False
-        return self._files == other._files and self._dirs == other._dirs
+    files = Field(Set[str], True, set())
+    dirs = Field(Set[str], True, set())
 
 
 class Tree:
@@ -97,7 +50,7 @@ class Tree:
         # There is no complex references in this structure, so the
         # copy.deepcopy method can just be used
         self._root_id = root_id
-        self._dirs = {root_id: Directory(root_id, None)}
+        self._dirs = {root_id: Directory(root_id)}
         self._files = {}
 
     @property
@@ -105,26 +58,12 @@ class Tree:
         return self._root_id
 
     @property
-    def dirs(self) -> MutableMapping[str, Directory]:
+    def dirs(self) -> Dict[str, Directory]:
         return self._dirs
 
     @property
-    def files(self) -> MutableMapping[str, File]:
+    def files(self) -> Dict[str, File]:
         return self._files
-
-    def as_dict(self) -> Dict:
-        def _as_dict(tree: Tree, subtree_id: str) -> Dict:
-            return {
-                'id': subtree_id,
-                'name': tree.dirs[subtree_id].name,
-                'children': [_as_dict(tree, child) for child in tree.dirs[subtree_id].dirs] + [{
-                    'id': child,
-                    'name': tree.files[child].name,
-                    'checksum': tree.files[child].checksum
-                } for child in tree.dirs[subtree_id].files]
-            }
-
-        return _as_dict(self, self._root_id)['children']
 
     def reconstruct_by_parents(self) -> None:
         orphan_files = set()
@@ -168,6 +107,32 @@ class Tree:
         dirs = directory.dirs
         return {self.files[child].name for child in files} | {self.dirs[child].name for child in dirs}
 
+    def equals(self, other) -> bool:
+        if not isinstance(other, Tree):
+            return False
+        if self.root_id != other.root_id:
+            return False
+
+        if self.files.keys() != other.files.keys():
+            return False
+        for identifier in self.files.keys() & other.files.keys():
+            if self.files[identifier].name != other.files[identifier].name:
+                return False
+            if self.files[identifier].parent != other.files[identifier].parent:
+                return False
+            if self.files[identifier].size != other.files[identifier].size:
+                return False
+
+        if self.dirs.keys() != other.dirs.keys():
+            return False
+        for identifier in self.dirs.keys() & other.dirs.keys():
+            if self.dirs[identifier].name != other.dirs[identifier].name:
+                return False
+            if self.dirs[identifier].parent != other.dirs[identifier].parent:
+                return False
+
+        return True
+
     def __eq__(self, other) -> bool:
         if not isinstance(other, Tree):
             return False
@@ -176,206 +141,109 @@ class Tree:
         return self._files == other._files and self._dirs == other._dirs
 
 
-class Operation:
+class Operation(DataClass):
     def human_readable_string(self) -> str:
-        return ''
+        # These strings are actually unreadable
+        raise NotImplementedError()
 
 
 class AddFile(Operation):
-    def __init__(self, parent_id: str, child_id: str, name: str, checksum: str):
-        self._parent_id = parent_id
-        self._child_id = child_id
-        self._name = name
-        self._checksum = checksum
-
-    @property
-    def parent_id(self) -> str:
-        return self._parent_id
-
-    @property
-    def child_id(self) -> str:
-        return self._child_id
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def checksum(self) -> str:
-        return self._checksum
-
-    def __eq__(self, other) -> bool:
-        return (isinstance(other, AddFile) and
-                self._parent_id == other._parent_id and
-                self._child_id == other._child_id and
-                self._name == other._name and
-                self._checksum == other._checksum)
-
-    def __hash__(self) -> int:
-        return hash((AddFile, self._parent_id, self._child_id, self._name, self._checksum))
+    parent_id = Field(str, True, None)
+    child_id = Field(str, True, None)
+    name = Field(str, True, None)
+    size = Field(int, True, 0)
 
     def human_readable_string(self) -> str:
-        return 'Create file (' + self._checksum + ') ' + self._name + ' with id ' + self._child_id + ' to directory with id ' + self._parent_id
+        return 'Create file {name} with id {child_id} to directory with id {parent_id}'.format(
+            name=self.name,
+            child_id=self.child_id,
+            parent_id=self.parent_id
+        )
+
+
+class AddCloudFile(AddFile):
+    eTag = Field(str, True, None)
+    cTag = Field(str, True, None)
 
 
 class DelFile(Operation):
-    def __init__(self, id: str):
-        self._id = id
-
-    @property
-    def id(self) -> str:
-        return self._id
-
-    def __eq__(self, other) -> bool:
-        return isinstance(other, DelFile) and self._id == other._id
-
-    def __hash__(self) -> int:
-        return hash((DelFile, self._id))
+    id = Field(str, True, None)
 
     def human_readable_string(self) -> str:
-        return 'Remove file with id ' + self._id
+        return 'Remove file with id {id}'.format(id=self.id)
 
 
 class ModifyFile(Operation):
-    def __init__(self, id: str, checksum: str):
-        self._id = id
-        self._checksum = checksum
-
-    @property
-    def id(self) -> str:
-        return self._id
-
-    @property
-    def checksum(self) -> str:
-        return self._checksum
-
-    def __eq__(self, other) -> bool:
-        return isinstance(other, ModifyFile) and self._id == other._id and self._checksum == other._checksum
-
-    def __hash__(self) -> int:
-        return hash((ModifyFile, self._id, self._checksum))
+    id = Field(str, True, None)
+    size = Field(int, True, 0)
 
     def human_readable_string(self) -> str:
-        return 'Override file with id ' + self._id + ' to (' + self._checksum + ')'
+        return 'Override the content of the file with id {id}'.format(id=self.id)
+
+
+class ModifyCloudFile(ModifyFile):
+    eTag = Field(str, True, None)
+    cTag = Field(str, True, None)
 
 
 class RenameMoveFile(Operation):
-    def __init__(self, id: str, name: Optional[str], destination_id: Optional[str]):
-        self._id = id
-        self._name = name
-        self._destination_id = destination_id
-
-    @property
-    def id(self) -> str:
-        return self._id
-
-    @property
-    def name(self) -> Optional[str]:
-        return self._name
-
-    @property
-    def destination_id(self) -> Optional[str]:
-        return self._destination_id
-
-    def __eq__(self, other) -> bool:
-        return (isinstance(other, RenameMoveFile) and
-                self._id == other._id and
-                self._name == other._name and
-                self._destination_id == other._destination_id)
-
-    def __hash__(self) -> int:
-        return hash((RenameMoveFile, self._id, self._name, self._destination_id))
+    id = Field(str, True, None)
+    name = Field(str, True, None)
+    destination_id = Field(str, True, None)
 
     def human_readable_string(self) -> str:
-        if self._name is None:
-            return 'Move file ' + self._id + ' to directory with id ' + self._destination_id
-        elif self._destination_id is None:
-            return 'Rename file ' + self._id + ' to ' + self._name
-        return 'Move file ' + self._id + ' to directory with id ' + self._destination_id + ' and rename to ' + self._name
+        if self.name is None:
+            return 'Move file {id} to directory with id {destination_id}'.format(
+                id=self.id,
+                destination_id=self.destination_id
+            )
+        elif self.destination_id is None:
+            return 'Rename file {id} to {name}'.format(id=self.id, name=self.name)
+        return 'Move file {id} to directory with id {destination_id} and rename it to {name}'.format(
+            id=self.id,
+            destination_id=self.destination_id,
+            name=self.name
+        )
 
 
 class AddDir(Operation):
-    def __init__(self, parent_id: str, child_id: str, name: str):
-        self._parent_id = parent_id
-        self._child_id = child_id
-        self._name = name
-
-    @property
-    def parent_id(self) -> str:
-        return self._parent_id
-
-    @property
-    def child_id(self) -> str:
-        return self._child_id
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    def __eq__(self, other) -> bool:
-        return (isinstance(other, AddDir) and
-                self._parent_id == other._parent_id and
-                self._child_id == other._child_id and
-                self._name == other._name)
-
-    def __hash__(self) -> int:
-        return hash((AddDir, self._parent_id, self._child_id, self._name))
+    parent_id = Field(str, True, None)
+    child_id = Field(str, True, None)
+    name = Field(str, True, None)
 
     def human_readable_string(self) -> str:
-        return 'Create directory ' + self._name + ' with id ' + self._child_id + ' to directory with id ' + self._parent_id
+        return 'Create directory {name} with id {child_id} to directory with id {parent_id}'.format(
+            name=self.name,
+            child_id=self.child_id,
+            parent_id=self.parent_id
+        )
 
 
 class DelDir(Operation):
-    def __init__(self, id: str):
-        self._id = id
-
-    @property
-    def id(self) -> str:
-        return self._id
-
-    def __eq__(self, other) -> bool:
-        return isinstance(other, DelDir) and self._id == other._id
-
-    def __hash__(self) -> int:
-        return hash((DelDir, self._id))
+    id = Field(str, True, None)
 
     def human_readable_string(self) -> str:
-        return 'Remove directory with id ' + self._id
+        return 'Remove directory with id {id}'.format(id=self.id)
 
 
 class RenameMoveDir(Operation):
-    def __init__(self, id: str, name: Optional[str], destination_id: Optional[str]):
-        self._id = id
-        self._name = name
-        self._destination_id = destination_id
-
-    @property
-    def id(self) -> str:
-        return self._id
-
-    @property
-    def name(self) -> Optional[str]:
-        return self._name
-
-    @property
-    def destination_id(self) -> Optional[str]:
-        return self._destination_id
-
-    def __eq__(self, other) -> bool:
-        return (isinstance(other, RenameMoveDir) and
-                self._id == other._id and
-                self._name == other._name and
-                self._destination_id == other._destination_id)
-
-    def __hash__(self) -> int:
-        return hash((RenameMoveDir, self._id, self._name, self._destination_id))
+    id = Field(str, True, None)
+    name = Field(str, True, None)
+    destination_id = Field(str, True, None)
 
     def human_readable_string(self) -> str:
-        if self._name is None:
-            return 'Move directory ' + self._id + ' to directory with id ' + self._destination_id
-        elif self._destination_id is None:
-            return 'Rename directory ' + self._id + ' to ' + self._name
-        return 'Move directory ' + self._id + ' to directory with id ' + self._destination_id + ' and rename to ' + self._name
+        if self.name is None:
+            return 'Move directory {id} to directory with id {destination_id}'.format(
+                id=self.id,
+                destination_id=self.destination_id
+            )
+        elif self.destination_id is None:
+            return 'Rename directory {id} to {name}'.format(id=self.id, name=self.name)
+        return 'Move directory {id} to directory with id {destination_id} and rename it to {name}'.format(
+            id=self.id,
+            destination_id=self.destination_id,
+            name=self.name
+        )
 
 
 @singledispatch
@@ -385,11 +253,12 @@ def basic_operation(args: Operation, tree: Tree) -> Node:
 
 @basic_operation.register(AddFile)
 def _(args: AddFile, tree: Tree) -> File:
-    parent = tree.dirs[args.parent_id]
-    child = File(args.child_id, args.name, args.checksum)
-    child.parent = args.parent_id
+    if isinstance(args, AddCloudFile):
+        child = CloudFile(args.child_id, args.name, args.parent_id, args.size, args.eTag, args.cTag, {})
+    else:
+        child = File(args.child_id, args.name, args.parent_id, args.size)
     tree.files[args.child_id] = child
-    parent.files.add(args.child_id)
+    tree.dirs[args.parent_id].files.add(args.child_id)
     return child
 
 
@@ -405,7 +274,10 @@ def _(args: DelFile, tree: Tree) -> File:
 @basic_operation.register(ModifyFile)
 def _(args: ModifyFile, tree: Tree) -> File:
     file = tree.files[args.id]
-    file.checksum = args.checksum
+    file.size = args.size
+    if isinstance(args, ModifyCloudFile) and isinstance(file, CloudFile):
+        file.eTag = args.eTag
+        file.cTag = args.cTag
     return file
 
 
@@ -425,11 +297,9 @@ def _(args: RenameMoveFile, tree: Tree) -> File:
 
 @basic_operation.register(AddDir)
 def _(args: AddDir, tree: Tree) -> Directory:
-    parent = tree.dirs[args.parent_id]
-    child = Directory(args.child_id, args.name)
-    child.parent = args.parent_id
+    child = Directory(args.child_id, args.name, args.parent_id)
     tree.dirs[args.child_id] = child
-    parent.dirs.add(args.child_id)
+    tree.dirs[args.parent_id].dirs.add(args.child_id)
     return child
 
 

@@ -16,19 +16,29 @@
 import argparse
 import logging
 from pathlib import Path
+
 from requests.exceptions import HTTPError
 
-from .sync import sync
-from .database import get_config, set_config
+from .sync import sync, SyncDirection
+from .database import CONFIG, TREE_ADAPTER, CONNECTION
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.formatter_class = argparse.RawDescriptionHelpFormatter
-    parser.add_argument('--set-location', metavar='DIRECTORY', help='Specify where to save your files')
-    parser.add_argument('--set-root-id', metavar='ROOT_ID', help='''
+
+    group_operation = parser.add_mutually_exclusive_group()
+    group_operation.add_argument('--download-only', action='store_true',
+                                 help='Override the local tree with the cloud one')
+    group_operation.add_argument('--upload-only', action='store_true',
+                                 help='Override the cloud tree with the cloud one')
+
+    group_config = parser.add_argument_group('Configurations')
+    group_config.add_argument('--set-location', metavar='DIRECTORY', help='Specify where to save your files')
+    group_config.add_argument('--set-root-id', metavar='ROOT_ID', help='''
     [DO NOT USE IF YOU DO NOT KNOW WHAT THIS MEANS] Specify the root id of your sub-folder in OneDrive
     ''')
+
     parser.description = '''Run this program with no arguments after setting location initiates a synchronization'''
     parser.epilog = '''
     Environment variables:
@@ -39,6 +49,9 @@ def main():
 
     logging.getLogger().setLevel(logging.INFO)
 
+    if (args.download_only or args.upload_only) and (args.set_root_id is not None or args.set_location is not None):
+        parser.error('Please configure before use')
+
     if args.set_root_id is not None and args.set_location is None:
         parser.error('Cannot reset root id now')
     if args.set_location is not None:
@@ -47,18 +60,28 @@ def main():
             parser.error('The destination path should be a directory')
         if list(path.iterdir()):
             parser.error('The destination should be empty')
-        set_config('local_path', args.set_location)
+        CONFIG.local_path = args.set_location
         logging.info('Destination path set successfully')
         if args.set_root_id is not None:
-            set_config('root_id', args.set_root_id)
+            CONFIG.root_id = args.set_root_id
             logging.info('Root id set successfully')
+        else:
+            del CONFIG.root_id
+        with CONNECTION:
+            TREE_ADAPTER.clear_all()
+            logging.info('Saved state reset successfully')
         return 0
 
-    if get_config('local_path') is None:
+    if getattr(CONFIG, 'local_path', None) is None:
         parser.error('Use --set-location to set destination path first')
 
     try:
-        return sync()
+        if args.download_only:
+            return sync(SyncDirection.DOWNLOAD_ONLY)
+        elif args.upload_only:
+            return sync(SyncDirection.UPLOAD_ONLY)
+        else:
+            return sync(SyncDirection.TWO_WAY)
     except HTTPError as error:
         print(error.response.headers, error.response.content)
         raise

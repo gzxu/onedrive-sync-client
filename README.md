@@ -23,7 +23,7 @@ Currently this utility utilizes [extended attributes](http://man7.org/linux/man-
 
 An essential background is that OneDrive, like almost every cloud storage providers, assigns an globally-unique identifier to every file or directory (folder), because this identifier is also linked to other metadata like whether this file is allowed to be viewed by anonymous visitors, and the list of metadata is subject to grow at any time. This effectively reduces the complexity of our algorithm.
 
-Firstly, the filesystem tree hierarchy will be constructed on both sides. OneDrive provided us with [a simple API](https://developer.microsoft.com/en-us/graph/docs/api-reference/v1.0/api/driveitem_delta) to dump the whole tree on the cloud, recursively, with the identifier and name of each item, and additionally the checksum of each file. The locally tree is easily constructed with aforementioned information, and the identifier information can be read from the extended attributes of each file or directory. You can inspect the locally stored identifier to `FILENAME` by `getfattr -n user.onedrive.id FILENAME`. Originally extended attributes are used because it moves with the corresponding file, but the default file manager, Nautilus, copies all extended attributes when copying files. This results in duplicated identifiers. Also, there will be no identifiers for new locally created files, so the locally constructed tree needs to assign a temporary identifier to each file, and maintain a mapping between the real identifiers and temporary identifiers. At the same time, the saved state of the tree at the last synchronization is also loaded.
+Firstly, the filesystem tree hierarchy will be constructed on both sides. OneDrive provided us with [a simple API](https://developer.microsoft.com/en-us/graph/docs/api-reference/v1.0/api/driveitem_delta) to dump the whole tree on the cloud, recursively, with the identifier and name of each item, and additionally the checksum of each file (_Current implementation is different_). The locally tree is easily constructed with aforementioned information, and the identifier information can be read from the extended attributes of each file or directory. You can inspect the locally stored identifier to `FILENAME` by `getfattr -n user.onedrive.id FILENAME`. Originally extended attributes are used because it moves with the corresponding file, but the default file manager, Nautilus, copies all extended attributes when copying files. This results in duplicated identifiers. Also, there will be no identifiers for new locally created files, so the locally constructed tree needs to assign a temporary identifier to each file, and maintain a mapping between the real identifiers and temporary identifiers. At the same time, the saved state of the tree at the last synchronization is also loaded.
 
 Then there are three trees, the cloud tree, the local tree and the saved tree. We need to merge them in a two-way manner. The cloud tree is then compared with the saved tree. Although we call them "trees", they are actually lists of nodes sorted by their identifiers. Each node stores its name, checksum if applies, and the identifier of its parent. For each identifier, if the corresponding nodes are the same in the cloud tree and in the saved tree, it is considered as unchanged. Even if its parent is renamed or moved, as long as the identifier of its parent remain unchanged, this node will move along with its parent. If an identifier only exists in the cloud tree, it must be newly created; if it only exists in the base tree, it must be removed in the cloud since the last synchronization. If the identifier of its parent is different, it must be moved. If its name or checksum is changed, it must be renamed or overridden. Thence, we get a change set between the cloud tree and the saved tree. Similar approaches made for the local tree, but as there would be duplicated identifiers, for every duplication, the most similar one among them will be kept, and other ones will be treated as newly created. This is not optimal, because if we copied a folder locally, there will lots of upload traffic as we need to upload the whole folder.
 
@@ -102,17 +102,19 @@ As OneDrive supports partial downloading, a download manager is needed especiall
 
 ## Future works
 
-- [ ] Solve the aforementioned bug and revise the algorithm to cover the aforementioned situation
-- [ ] Optimize deletion in the cloud by pruning
+- [x] Solve the aforementioned bug and revise the algorithm to cover the aforementioned situation
+- [x] Optimize deletion in the cloud by pruning
 - [ ] Optimize by omitting changes that is the same in the two change sets
-- [ ] Add option to force override local tree with the cloud one or vice versa
-- [ ] Use [`st_mtime_ns`](http://man7.org/linux/man-pages/man7/inode.7.html) to detect changes instead of checksums for faster local tree constructing and [OneDrive for Business and SharePoint Server 2016](https://developer.microsoft.com/en-us/graph/docs/api-reference/v1.0/resources/hashes) support. Checksums can be used as an auxiliary method to detect local changes, and `eTag`s can be used to detect changes in the cloud 
+- [x] Add option to force override local tree with the cloud one or vice versa
+- [x] Use [`st_mtime_ns`](http://man7.org/linux/man-pages/man7/inode.7.html) to detect changes instead of checksums for faster local tree constructing and [OneDrive for Business and SharePoint Server 2016](https://developer.microsoft.com/en-us/graph/docs/api-reference/v1.0/resources/hashes) support. Checksums can be used as an auxiliary method to detect local changes, and `eTag`s can be used to detect changes in the cloud 
+- [x] Use DAO when handling databases when possible
 - [ ] Enable Windows and/or macOS support (easy but probably unnecessary job)
 - [ ] Come up with a better model describing this problem and revise the algorithm based on this
 - [ ] Replenish the documentation in comments
 - [ ] Sweep bug out by introducing unit tests
 - [ ] Agent for batch requests, as mentioned above
-- [ ] Download and upload manager for unstable network connection, with multi-threading support
+- [x] Download and upload manager for unstable network connection
+- [ ] Download and upload manager with multi-threading support
 - [ ] Utilize the [copy API](https://developer.microsoft.com/en-us/graph/docs/api-reference/v1.0/api/driveitem_copy), however as this an asynchronous one, parallel programming is a necessity
 - [ ] HTTP 2.0 support with libraries other than [`requests`](https://requests.readthedocs.io/)
 - [ ] Revise the commandline user interface by list out necessary information in a human-readable manner

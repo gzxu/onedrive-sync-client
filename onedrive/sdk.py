@@ -15,17 +15,18 @@
 
 import os
 from collections import OrderedDict
-from functools import singledispatch
 from pathlib import Path
-from typing import Callable, Union, Dict, Mapping, Optional
+from typing import Callable, Union, Dict, BinaryIO
 
+import requests
+from requests import Session, HTTPError, RequestException
 from oauthlib.oauth2 import WebApplicationClient
-from requests import Session
 from requests_oauthlib import OAuth2Session
 
-from .database import set_config, update_delta_tree
-from .local import save_id_in_metadata
-from .model import Tree, Operation, AddFile, DelFile, ModifyFile, RenameMoveFile, AddDir, DelDir, RenameMoveDir
+from .algorithms import HASH_ENGINES
+from .database import CONFIG, TreeType, CONNECTION
+from .database import TREE_ADAPTER
+from .model import Tree, CloudFile, Directory
 
 os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
 MSGRAPH_ENDPOINT = 'https://graph.microsoft.com/v1.0'
@@ -93,20 +94,61 @@ def get_root_id(session: Session) -> str:
     return response.json()['id']
 
 
-def upload_file(session: Session, identifier: str, content: Union[str, Path]) -> None:
-    content = Path(content)
-    with content.open('rb') as file:
-        response = session.put(MSGRAPH_ENDPOINT + '/me/drive/items/' + identifier + '/content', data=file)
-        response.raise_for_status()
+def upload_large_file_by_parent(session: Session, parent_id: str, name: str, stream: BinaryIO, size: int):
+    response = session.post(MSGRAPH_ENDPOINT + '/me/drive/items/' + parent_id + ':/' + name + ':/createUploadSession')
+    response.raise_for_status()
+    url = response.json()['uploadUrl']
+
+    bytes_sent = 0
+    chunk = None
+    while bytes_sent < size:
+        try:
+            length = min(320 * 1024, size - bytes_sent)
+            if not chunk:
+                chunk = stream.read(length)
+            if len(chunk) != length:
+                raise AssertionError()
+            response = requests.put(url, data=chunk, headers={'content-range': 'bytes {begin}-{end}/{size}'.format(
+                begin=bytes_sent,
+                end=bytes_sent + length - 1,
+                size=size
+            )})
+            response.raise_for_status()
+            chunk = None
+            bytes_sent += length
+        except RequestException:
+            pass
+
+    response = response.json()
+    return file_from_item(response)
 
 
-def create_file(session: Session, parent_id: str, name: str, content: Union[str, Path]) -> str:
-    content = Path(content)
-    with content.open('rb') as file:
-        url = MSGRAPH_ENDPOINT + '/me/drive/items/' + parent_id + "/children('" + name + "')/content"
-        response = session.put(url, data=file)
-        response.raise_for_status()
-        return response.json()['id']
+def upload_file_by_parent(session: Session, parent_id: str, name: str, stream: BinaryIO):
+    response = session.put(
+        MSGRAPH_ENDPOINT + '/me/drive/items/' + parent_id + "/children('" + name + "')/content", data=stream
+    )
+    response.raise_for_status()
+    response = response.json()
+    return file_from_item(response)
+
+
+def upload_file_by_id(session: Session, identifier: str, stream: BinaryIO):
+    response = session.put(MSGRAPH_ENDPOINT + '/me/drive/items/' + identifier + '/content', data=stream)
+    response.raise_for_status()
+    response = response.json()
+    return file_from_item(response)
+
+
+def file_from_item(item):
+    return CloudFile(
+        item['id'],
+        item['name'],
+        item['parentReference']['id'],
+        item['size'],
+        item['eTag'],
+        item.get('cTag', None),
+        item['file']['hashes'] if 'hashes' in item['file'] else None
+    )
 
 
 def create_dir(session: Session, parent_id: str, name: str) -> str:
@@ -135,102 +177,146 @@ def move_rename_item(session: Session, identifier: str, *, destination_id: str =
     response.raise_for_status()
 
 
-def download_file(session: Session, identifier: str, path: Union[str, Path], *, checksum: Dict[Callable, str] = None):
-    path = Path(path)
-    algorithms = {algorithm: algorithm() for algorithm in checksum}
-    with path.open('wb') as file:
-        response = session.get(MSGRAPH_ENDPOINT + '/me/drive/items/' + identifier + '/content?AVOverride=1', stream=True)
-        response.raise_for_status()
-        for chunk in response.iter_content(chunk_size=None):
-            file.write(chunk)
-            for algorithm in algorithms:
-                algorithms[algorithm].update(chunk)
-    for algorithm in algorithms:
-        if algorithms[algorithm].hexdigest().upper() != checksum[algorithm].upper():
+def download_file(session: Session, identifier: str, destination: BinaryIO, size: int, *,
+                  checksum: Dict[str, str] = None, timeout: float = 10):
+    engines = {algorithm: HASH_ENGINES[algorithm]() for algorithm in checksum if algorithm in HASH_ENGINES}
+    for engine in engines.values():
+        engine.send(None)
+
+    bytes_read = 0
+    url = MSGRAPH_ENDPOINT + '/me/drive/items/' + identifier + '/content?AVOverride=1'
+    response = session.get(url, allow_redirects=False)
+    response.raise_for_status()
+    if response.status_code != 302:
+        raise AssertionError('Not a redirecting link')
+    url = response.headers['location']
+
+    # As the content is compressed the content-length header is inaccurate
+    while True:
+        try:
+            headers = {'Range': 'bytes=' + str(bytes_read) + '-'} if bytes_read != 0 else {}
+            response = requests.get(url, stream=True, headers=headers, timeout=timeout)
+            response.raise_for_status()
+            for chunk in response.iter_content(chunk_size=None):
+                bytes_read += len(chunk)
+                if bytes_read > size:
+                    raise AssertionError('Read more than expected')
+                destination.write(chunk)
+                for engine in engines.values():
+                    engine.send(chunk)
+            if bytes_read != size:
+                raise AssertionError('Size mismatch')
+            break
+
+        except RequestException as e:
+            print(e)
+            pass
+
+    for algorithm, engine in engines.items():
+        calculated = engine.send(None)
+        expected = checksum[algorithm].upper()
+        if calculated != expected:
             raise Exception('Checksum of {algorithm} mismatch, should be {expected}, actually is {actual}'.format(
                 algorithm=algorithm,
-                expected=checksum[algorithm].upper(),
-                actual=algorithms[algorithm].hexdigest().upper()
+                expected=expected,
+                actual=calculated
             ))
 
 
-def retrieve_delta(session: Session, root_id: str = None) -> Tree:
+def retrieve_delta(session: Session) -> Tree:
+    root_id = getattr(CONFIG, 'root_id', None)
+    selects = ','.join([
+        'id',
+        'name',
+        'file',
+        'folder',
+        'package',
+        'deleted',
+        'parentReference',
+        'eTag',
+        'cTag',
+        'size'
+    ])
     items = OrderedDict()
-    # delta_link = get_config('delta_link', None)
-    delta_link = None  # Force set it to None for bugs TODO
-    if delta_link is None:
-        selects = ','.join(['id', 'name', 'root', 'file', 'folder', 'parentReference'])
-        if root_id is None:
-            url = MSGRAPH_ENDPOINT + '/me/drive/root/delta?$select=' + selects
-        else:
-            # The delta link will also contain the $select parameters
-            url = MSGRAPH_ENDPOINT + '/me/drive/items/' + root_id + '/delta?$select=' + selects
-    else:
-        url = delta_link
+    delta_link = getattr(CONFIG, 'delta_link', None)
 
-    while True:
+    url = None
+    if delta_link is not None:
+        response = session.get(delta_link)
+        try:
+            response.raise_for_status()
+            url = delta_link
+            tree = TREE_ADAPTER.load_tree(TreeType.DELTA)
+        except HTTPError:
+            pass
+
+    if url is None:
+        if root_id is None:
+            root_id = get_root_id(session)
+            CONFIG.root_id = root_id
+        # The delta link will also contain the $select parameters
+        url = MSGRAPH_ENDPOINT + '/me/drive/items/' + root_id + '/delta?$select=' + selects
+        tree = Tree(root_id)
         response = session.get(url)
         response.raise_for_status()
+
+    while True:
         response = response.json()
         for item in response['value']:
             identifier = item['id']
-            if root_id is None and 'root' in item:
-                root_id = identifier
             if identifier in items:
                 del items[identifier]
             items[identifier] = item
         if '@odata.nextLink' in response:
             url = response['@odata.nextLink']
+            response = session.get(url)
+            response.raise_for_status()
         elif '@odata.deltaLink' in response:
             new_delta_link = response['@odata.deltaLink']
             break
         else:
             raise Exception('Unexpected response')
 
-    tree = update_delta_tree(items.values(), root_id)
-    # set_config('delta_link', new_delta_link)  # Force set it to None for bugs TODO
+    files = tree.files
+    dirs = tree.dirs
+
+    deleted = set()
+    for identifier, item in items.items():
+        if identifier == root_id:
+            continue
+        if 'deleted' in item:
+            if identifier in files:
+                del files[identifier]
+            else:
+                deleted.add(identifier)
+        elif 'file' in item:
+            files[identifier] = file_from_item(item)
+        elif 'folder' in item or 'package' in item:
+            dirs[identifier] = Directory(identifier, item['name'], item['parentReference']['id'])
+
+    count = False
+    while True:
+        for identifier in set(deleted):
+            if all(item.parent != identifier for item in files) and all(item.parent != identifier for item in dirs):
+                deleted.remove(identifier)
+                del dirs[identifier]
+                count = True
+        if not count:
+            break
+
+    tree = Tree(root_id)
+    tree.files.update(files)
+    tree.dirs.update(dirs)
+    tree.reconstruct_by_parents()
+
+    for identifier, file in tree.files.items():
+        if file.cTag is None:
+            response = session.get(MSGRAPH_ENDPOINT + '/me/drive/items/' + file.id + '?$select=cTag')
+            response.raise_for_status()
+            file.cTag = response.json()['cTag']
+
+    with CONNECTION:
+        TREE_ADAPTER.save_tree(tree, TreeType.DELTA)
+        CONFIG['delta_link'] = new_delta_link
+
     return tree
-
-
-@singledispatch
-def cloud_apply_operation(args: Operation, id_to_path: Mapping[str, Path], session: Session) -> str:
-    raise NotImplementedError()
-
-
-@cloud_apply_operation.register(AddFile)
-def _(args: AddFile, id_to_path: Mapping[str, Path], session: Session) -> Optional[str]:
-    new_id = create_file(session, args.parent_id, args.name, id_to_path[args.child_id])
-    save_id_in_metadata(new_id, id_to_path[args.child_id])
-    return new_id
-
-
-@cloud_apply_operation.register(DelFile)
-def _(args: DelFile, id_to_path: Mapping[str, Path], session: Session) -> Optional[str]:
-    return remove_item(session, args.id)
-
-
-@cloud_apply_operation.register(ModifyFile)
-def _(args: ModifyFile, id_to_path: Mapping[str, Path], session: Session) -> Optional[str]:
-    return upload_file(session, args.id, id_to_path[args.id])
-
-
-@cloud_apply_operation.register(RenameMoveFile)
-def _(args: RenameMoveFile, id_to_path: Mapping[str, Path], session: Session) -> Optional[str]:
-    return move_rename_item(session, args.id, destination_id=args.destination_id, name=args.name)
-
-
-@cloud_apply_operation.register(AddDir)
-def _(args: AddDir, id_to_path: Mapping[str, Path], session: Session) -> Optional[str]:
-    new_id = create_dir(session, args.parent_id, args.name)
-    save_id_in_metadata(new_id, id_to_path[args.child_id])
-    return new_id
-
-
-@cloud_apply_operation.register(DelDir)
-def _(args: DelDir, id_to_path: Mapping[str, Path], session: Session) -> Optional[str]:
-    return remove_item(session, args.id)
-
-
-@cloud_apply_operation.register(RenameMoveDir)
-def _(args: RenameMoveDir, id_to_path: Mapping[str, Path], session: Session) -> Optional[str]:
-    return move_rename_item(session, args.id, destination_id=args.destination_id, name=args.name)
