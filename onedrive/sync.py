@@ -63,24 +63,15 @@ def sync(direction: SyncDirection) -> int:
     if direction == SyncDirection.TWO_WAY:
         cloud_changes = get_change_set(saved_tree, cloud_tree, compare_file_by_cTag)
         local_changes = get_change_set(saved_tree, local_tree, compare_file_by_mtime(last_sync_time))
-    elif direction == SyncDirection.DOWNLOAD_ONLY:
-        cloud_changes = get_change_set(local_tree, cloud_tree, compare_file_by_hashes(id_to_path))
-        local_changes = set()
-    elif direction == SyncDirection.UPLOAD_ONLY:
-        cloud_changes = set()
-        local_changes = get_change_set(cloud_tree, local_tree, compare_file_by_mtime(last_sync_time))
-    else:
-        raise AssertionError()
 
-    check_same_node_operations(cloud_changes, local_changes)
+        check_same_node_operations(cloud_changes, local_changes)
 
-    cloud_dependencies = mark_dependencies(saved_tree, cloud_changes)
-    local_dependencies = mark_dependencies(saved_tree, local_changes)
+        cloud_dependencies = mark_dependencies(saved_tree, cloud_changes)
+        local_dependencies = mark_dependencies(saved_tree, local_changes)
 
-    cloud_script = topological_sort(cloud_changes, cloud_dependencies)
-    local_script = topological_sort(local_changes, local_dependencies)
+        cloud_script = topological_sort(cloud_changes, cloud_dependencies)
+        local_script = topological_sort(local_changes, local_dependencies)
 
-    if direction == SyncDirection.TWO_WAY:
         optimize_cloud_deletion(saved_tree, local_script)
 
         if not field_test(saved_tree, cloud_script).equals(cloud_tree):
@@ -93,9 +84,23 @@ def sync(direction: SyncDirection) -> int:
         if not cloud_final.equals(local_final):
             raise AssertionError()
     elif direction == SyncDirection.DOWNLOAD_ONLY:
+        cloud_changes = get_change_set(local_tree, cloud_tree, compare_file_by_hashes(id_to_path))
+
+        cloud_dependencies = mark_dependencies(local_tree, cloud_changes)
+
+        cloud_script = topological_sort(cloud_changes, cloud_dependencies)
+        local_script = []
+
         if not field_test(local_tree, cloud_script).equals(cloud_tree):
             raise AssertionError()
     elif direction == SyncDirection.UPLOAD_ONLY:
+        local_changes = get_change_set(cloud_tree, local_tree, compare_file_by_mtime(last_sync_time))
+
+        local_dependencies = mark_dependencies(cloud_tree, local_changes)
+
+        cloud_script = []
+        local_script = topological_sort(local_changes, local_dependencies)
+
         optimize_cloud_deletion(saved_tree, local_script)
 
         if not field_test(cloud_tree, local_script).equals(local_tree):

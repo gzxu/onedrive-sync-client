@@ -19,7 +19,8 @@ import subprocess
 
 
 def call(*args, **kwargs):
-    return ' '.join(subprocess.run(args, stdout=subprocess.PIPE, universal_newlines=True, check=True, **kwargs).stdout.split())
+    return ' '.join(
+        subprocess.run(args, stdout=subprocess.PIPE, universal_newlines=True, check=True, **kwargs).stdout.split())
 
 
 def get_git_tag():
@@ -32,7 +33,7 @@ def get_git_tag():
 setup(
     name='onedrive-sync-client',
     version=get_git_tag(),
-    packages=find_packages(),
+    packages=find_packages(exclude=["*.tests", "*.tests.*", "tests.*", "tests"]),
     install_requires=Path('requirements.txt').read_text(),
     author='XU Guang-zhao',
     description='OneDrive Client with Two-way Synchronizing Feature',
@@ -62,5 +63,7 @@ setup(
         'Programming Language :: Python :: 3.7',
         'Topic :: Office/Business :: Office Suites',
         'Topic :: Utilities'
-    )
+    ),
+    test_require=[],
+    test_suite='tests'
 )
