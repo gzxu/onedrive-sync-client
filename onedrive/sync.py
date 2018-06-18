@@ -23,6 +23,7 @@ from typing import Mapping, MutableMapping, Sequence
 
 from requests import Session
 
+from . import _compare_size
 from .algorithms import get_change_set, check_same_node_operations, mark_dependencies, topological_sort, field_test
 from .algorithms import optimize_cloud_deletion, compare_file_by_cTag, compare_file_by_mtime, compare_file_by_hashes
 from .database import CONFIG, TreeType, TREE_ADAPTER, CONNECTION
@@ -72,8 +73,6 @@ def sync(direction: SyncDirection) -> int:
         cloud_script = topological_sort(cloud_changes, cloud_dependencies)
         local_script = topological_sort(local_changes, local_dependencies)
 
-        optimize_cloud_deletion(saved_tree, local_script)
-
         if not field_test(saved_tree, cloud_script).equals(cloud_tree):
             raise AssertionError()
         if not field_test(saved_tree, local_script).equals(local_tree):
@@ -83,6 +82,8 @@ def sync(direction: SyncDirection) -> int:
         local_final = field_test(local_tree, cloud_script)
         if not cloud_final.equals(local_final):
             raise AssertionError()
+
+        local_script = optimize_cloud_deletion(saved_tree, local_script)
     elif direction == SyncDirection.DOWNLOAD_ONLY:
         cloud_changes = get_change_set(local_tree, cloud_tree, compare_file_by_hashes(id_to_path))
 
@@ -311,10 +312,10 @@ def _(
 ) -> Operation:
     parent_id = real_id.get(args.parent_id, args.parent_id)
     path = id_to_path[args.child_id]
-    if path.stat().st_size != args.size:
+    if not _compare_size(path.stat().st_size, args.size):
         raise AssertionError()
     with path.open('rb') as file:
-        new_file = upload_large_file_by_parent(session, parent_id, args.name, file, args.size)
+        new_file = upload_large_file_by_parent(session, parent_id, args.name, file, path.stat().st_size)
     save_id_in_metadata(new_file.id, path)
     real_id[args.child_id] = new_file.id
     return AddCloudFile(parent_id, new_file.id, args.name, args.size, new_file.eTag, new_file.cTag)
@@ -342,10 +343,10 @@ def _(
 ) -> Operation:
     orig_file = cloud_tree.files[args.id]
     path = id_to_path[args.id]
-    if path.stat().st_size != args.size:
+    if not _compare_size(path.stat().st_size, args.size):
         raise AssertionError()
     with path.open('rb') as file:
-        new_file = upload_large_file_by_parent(session, orig_file.parent, orig_file.name, file, args.size)
+        new_file = upload_large_file_by_parent(session, orig_file.parent, orig_file.name, file, path.stat().st_size)
     return ModifyCloudFile(args.id, args.size, new_file.eTag, new_file.cTag)
 
 

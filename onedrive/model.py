@@ -16,6 +16,7 @@
 from functools import singledispatch
 from typing import Dict, Set
 
+from . import _compare_size
 from .dataclass import Field, DataClass
 
 
@@ -120,7 +121,7 @@ class Tree:
                 return False
             if self.files[identifier].parent != other.files[identifier].parent:
                 return False
-            if self.files[identifier].size != other.files[identifier].size:
+            if not _compare_size(self.files[identifier].size, other.files[identifier].size):
                 return False
 
         if self.dirs.keys() != other.dirs.keys():

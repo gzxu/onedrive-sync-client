@@ -17,6 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Iterator, Tuple, Set, MutableMapping, Mapping
 
+from . import _compare_size
 from .database import CONFIG
 from .model import AddFile, AddDir, CloudFile, AddCloudFile
 from .model import Tree, Directory, Operation, RenameMoveFile, RenameMoveDir, LocalFile
@@ -89,7 +90,7 @@ def _normalize_local_tree(
                 def file_compare(temp_file_id: str):
                     temp_file = local_tree.files[temp_file_id]
                     return (
-                        temp_file.size == cloud_file.size,
+                        _compare_size(temp_file.size, cloud_file.size),
                         temp_file.parent == cloud_file.parent,
                         temp_file.name == cloud_file.name
                     )

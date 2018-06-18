@@ -12,3 +12,14 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+
+def _compare_size(size1: int, size2: int):
+    # Workaround for https://github.com/OneDrive/onedrive-api-docs/issues/123
+    # All workarounds:
+    #   * Here, together with every usage of this function
+    #   * dataclass.py, _fget() returns 0 for size attributes
+    #   * sdk.py, upload_large_file_by_parent() and download_file()
+
+    # return size1 == size2
+    return True

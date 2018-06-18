@@ -22,6 +22,7 @@ from functools import singledispatch
 from typing import Set, Tuple, Sequence, Optional, Callable, Mapping
 from pathlib import Path
 
+from . import _compare_size
 from .dataclass import DataClass, Field
 from .model import Operation, AddFile, DelFile, ModifyFile, RenameMoveFile, AddDir, DelDir, RenameMoveDir, CloudFile
 from .model import Tree, check_operation, basic_operation, File, LocalFile
@@ -40,7 +41,7 @@ def compare_file_by_mtime(last_sync_timestamp: int) -> Callable[[File, LocalFile
 
 def compare_file_by_hashes(id_to_path: Mapping[str, Path]) -> Callable[[LocalFile, CloudFile], bool]:
     def _(before: LocalFile, after: CloudFile) -> bool:
-        if before.size != after.size:
+        if not _compare_size(before.size, after.size):
             return False
         hashes = after.hashes if after.hashes is not None else {}
         for algorithm in hashes:
@@ -329,9 +330,8 @@ def optimize_cloud_deletion(tree: Tree, script: Sequence[Operation]) -> Sequence
                 parent_id = tree.dirs[line.id].parent
             else:
                 raise AssertionError()
-            for op in script:
-                if isinstance(op, DelDir) and op.id == parent_id:
-                    continue
+            if any(isinstance(op, DelDir) and op.id == parent_id for op in script):
+                continue
         result.append(line)
     return result
 

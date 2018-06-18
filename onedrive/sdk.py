@@ -23,6 +23,7 @@ from requests import Session, HTTPError, RequestException
 from oauthlib.oauth2 import WebApplicationClient
 from requests_oauthlib import OAuth2Session
 
+from onedrive import _compare_size
 from .algorithms import HASH_ENGINES
 from .database import CONFIG, TreeType, CONNECTION
 from .database import TREE_ADAPTER
@@ -95,6 +96,7 @@ def get_root_id(session: Session) -> str:
 
 
 def upload_large_file_by_parent(session: Session, parent_id: str, name: str, stream: BinaryIO, size: int):
+    # The size parameter should only be the real size provided by the filesystem
     response = session.post(MSGRAPH_ENDPOINT + '/me/drive/items/' + parent_id + ':/' + name + ':/createUploadSession')
     response.raise_for_status()
     url = response.json()['uploadUrl']
@@ -199,12 +201,13 @@ def download_file(session: Session, identifier: str, destination: BinaryIO, size
             response.raise_for_status()
             for chunk in response.iter_content(chunk_size=None):
                 bytes_read += len(chunk)
-                if bytes_read > size:
+                # if bytes_read > size:  # The wrong size provided by OneDrive may only be larger
+                if False:  # But the size value is forcefully reset to 0
                     raise AssertionError('Read more than expected')
                 destination.write(chunk)
                 for engine in engines.values():
                     engine.send(chunk)
-            if bytes_read != size:
+            if not _compare_size(bytes_read, size):
                 raise AssertionError('Size mismatch')
             break
 
@@ -294,10 +297,10 @@ def retrieve_delta(session: Session) -> Tree:
         elif 'folder' in item or 'package' in item:
             dirs[identifier] = Directory(identifier, item['name'], item['parentReference']['id'])
 
-    count = False
     while True:
+        count = False
         for identifier in set(deleted):
-            if all(item.parent != identifier for item in files) and all(item.parent != identifier for item in dirs):
+            if all(item.parent != identifier for item in list(files.values()) + list(dirs.values())):
                 deleted.remove(identifier)
                 del dirs[identifier]
                 count = True

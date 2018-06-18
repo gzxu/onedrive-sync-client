@@ -45,6 +45,8 @@ def _hash(self) -> int:
 
 def _fget(name: str, field: Field):
     def fget(self):
+        if name == 'size':
+            return 0  # Workaround for https://github.com/OneDrive/onedrive-api-docs/issues/123
         return getattr(self, '_' + name)
 
     fget.__annotations__ = {'return': field.type}
