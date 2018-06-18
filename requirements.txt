@@ -13,5 +13,11 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-
-requests-oauthlib
+certifi==2018.4.16
+chardet==3.0.4
+idna==2.6
+meson==0.46.0
+oauthlib==2.1.0
+requests==2.18.4
+requests-oauthlib==1.0.0
+urllib3==1.22
