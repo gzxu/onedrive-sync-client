@@ -302,7 +302,8 @@ def retrieve_delta(session: Session) -> Tree:
         for identifier in set(deleted):
             if all(item.parent != identifier for item in list(files.values()) + list(dirs.values())):
                 deleted.remove(identifier)
-                del dirs[identifier]
+                if identifier in dirs:
+                    del dirs[identifier]
                 count = True
         if not count:
             break
