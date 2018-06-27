@@ -104,10 +104,12 @@ As OneDrive supports partial downloading, a download manager is needed especiall
 
 - [x] Solve the aforementioned bug and revise the algorithm to cover the aforementioned situation
 - [x] Optimize deletion in the cloud by pruning
+- [ ] Transactional syncing to avoid unpredictable exceptions
 - [ ] Optimize by omitting changes that is the same in the two change sets
 - [x] Add option to force override local tree with the cloud one or vice versa
 - [x] Use [`st_mtime_ns`](http://man7.org/linux/man-pages/man7/inode.7.html) to detect changes instead of checksums for faster local tree constructing and [OneDrive for Business and SharePoint Server 2016](https://developer.microsoft.com/en-us/graph/docs/api-reference/v1.0/resources/hashes) support. Checksums can be used as an auxiliary method to detect local changes, and `eTag`s can be used to detect changes in the cloud 
 - [x] Use DAO when handling databases when possible
+- [ ] Use SQLAlchemy as the ORM engine
 - [ ] Enable Windows and/or macOS support (easy but probably unnecessary job)
 - [ ] Come up with a better model describing this problem and revise the algorithm based on this
 - [ ] Replenish the documentation in comments
