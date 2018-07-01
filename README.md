@@ -102,6 +102,7 @@ As OneDrive supports partial downloading, a download manager is needed especiall
 
 ## Future works
 
+- [ ] Solve the aforementioned issue by detecting missing identifiers and prompting the user
 - [x] Solve the aforementioned bug and revise the algorithm to cover the aforementioned situation
 - [x] Optimize deletion in the cloud by pruning
 - [ ] Transactional syncing to avoid unpredictable exceptions
