@@ -26,7 +26,7 @@ from requests import Session
 from . import _compare_size
 from .algorithms import get_change_set, check_same_node_operations, mark_dependencies, topological_sort, field_test
 from .algorithms import optimize_cloud_deletion, compare_file_by_cTag, compare_file_by_mtime, compare_file_by_hashes
-from .database import CONFIG, TreeType, TREE_ADAPTER, CONNECTION
+from .database import CONFIG, TreeType, session_scope, load_tree, save_tree, ConfigEntity
 from .local import get_local_tree
 from .model import RenameMoveDir, Tree, AddCloudFile, ModifyCloudFile
 from .model import basic_operation, Operation, AddFile, DelFile, ModifyFile, RenameMoveFile, AddDir, DelDir
@@ -44,14 +44,15 @@ class SyncDirection(Enum):
 def sync(direction: SyncDirection) -> int:
     token = getattr(CONFIG, 'token', None)
     token = json.loads(token) if token is not None else None
-    session = get_session(token, lambda new_token: setattr(CONFIG, 'token', json.dumps(new_token)))
+    sdk_session = get_session(token, lambda new_token: setattr(CONFIG, 'token', json.dumps(new_token)))
 
     logging.info('Retrieving cloud tree structure')
-    cloud_tree = retrieve_delta(session)
+    cloud_tree = retrieve_delta(sdk_session)
     logging.info('Cloud tree structure retrieved successfully')
 
     logging.info('Loading previous state from database')
-    saved_tree = TREE_ADAPTER.load_tree(TreeType.SAVED)
+    with session_scope() as db_session:
+        saved_tree = load_tree(db_session, TreeType.SAVED)
     logging.info('Previous state loaded successfully')
 
     logging.info('Parsing local tree structure')
@@ -115,13 +116,13 @@ def sync(direction: SyncDirection) -> int:
     else:
         logging.info('Applying these operations locally:')
         for line in cloud_script:
-            logging.info(line.human_readable_string())
+            logging.info(str(line))
     if not local_script:
         logging.info('No operations need to be applied to the cloud')
     else:
         logging.info('Applying these operations to the cloud:')
         for line in local_script:
-            logging.info(line.human_readable_string())
+            logging.info(str(line))
 
     if cloud_script or local_script:
         while True:
@@ -133,12 +134,12 @@ def sync(direction: SyncDirection) -> int:
                 logging.info('Cancelled')
                 return -1
 
-        local_apply_script(cloud_script, id_to_path, local_tree, cloud_tree, session)
-        cloud_apply_script(local_script, id_to_path, local_tree, cloud_tree, session)
+        local_apply_script(cloud_script, id_to_path, local_tree, cloud_tree, sdk_session)
+        cloud_apply_script(local_script, id_to_path, local_tree, cloud_tree, sdk_session)
 
-    with CONNECTION:
-        TREE_ADAPTER.save_tree(cloud_tree, TreeType.SAVED)
-        CONFIG['last_sync_time'] = str(int(time.time() * 1e9))
+    with session_scope() as db_session:
+        save_tree(db_session, cloud_tree, TreeType.SAVED)
+        db_session.merge(ConfigEntity(key='last_sync_time', value=str(int(time.time() * 1e9))))
 
     return 0
 

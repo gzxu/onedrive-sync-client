@@ -16,34 +16,40 @@
 from functools import singledispatch
 from typing import Dict, Set
 
+import attr
+
 from . import _compare_size
-from .dataclass import Field, DataClass
 
 
-class Node(DataClass):
-    id = Field(str, True, None)
-    name = Field(str, False, None)
-    parent = Field(str, False, None)
+@attr.s(slots=True)
+class Node:
+    id = attr.ib(type=str)
+    name = attr.ib(type=str, default=None)
+    parent = attr.ib(type=str, default=None)
 
 
+@attr.s(slots=True)
 class File(Node):
-    size = Field(int, False, 0)
-    pass
+    # Workaround for https://github.com/OneDrive/onedrive-api-docs/issues/123
+    size = attr.ib(type=int, default=0, converter=lambda _: 0)
 
 
+@attr.s(slots=True)
 class CloudFile(File):
-    eTag = Field(str, False, None)
-    cTag = Field(str, False, None)
-    hashes = Field(dict, True, {})
+    eTag = attr.ib(type=str, default=None)
+    cTag = attr.ib(type=str, default=None)
+    hashes = attr.ib(type=dict, factory=dict)
 
 
+@attr.s(slots=True)
 class LocalFile(File):
-    st_mtime_ns = Field(int, False, 0)
+    st_mtime_ns = attr.ib(type=int, default=0)
 
 
+@attr.s(slots=True)
 class Directory(Node):
-    files = Field(Set[str], True, set())
-    dirs = Field(Set[str], True, set())
+    files = attr.ib(type=Set[str], factory=set)
+    dirs = attr.ib(type=Set[str], factory=set)
 
 
 class Tree:
@@ -134,27 +140,21 @@ class Tree:
 
         return True
 
-    def __eq__(self, other) -> bool:
-        if not isinstance(other, Tree):
-            return False
-        if self.root_id != other._root_id:
-            return False
-        return self._files == other._files and self._dirs == other._dirs
+
+# Logically this class is immutable, but frozen=True is inefficient for slots=True, so hash=True is necessary
+@attr.s(slots=True, hash=True)
+class Operation:
+    pass
 
 
-class Operation(DataClass):
-    def human_readable_string(self) -> str:
-        # These strings are actually unreadable
-        raise NotImplementedError()
-
-
+@attr.s(slots=True, hash=True)
 class AddFile(Operation):
-    parent_id = Field(str, True, None)
-    child_id = Field(str, True, None)
-    name = Field(str, True, None)
-    size = Field(int, True, 0)
+    parent_id = attr.ib(type=str)
+    child_id = attr.ib(type=str)
+    name = attr.ib(type=str)
+    size = attr.ib(type=int)
 
-    def human_readable_string(self) -> str:
+    def __str__(self) -> str:
         return 'Create file {name} with id {child_id} to directory with id {parent_id}'.format(
             name=self.name,
             child_id=self.child_id,
@@ -162,37 +162,42 @@ class AddFile(Operation):
         )
 
 
+@attr.s(slots=True, hash=True)
 class AddCloudFile(AddFile):
-    eTag = Field(str, True, None)
-    cTag = Field(str, True, None)
+    eTag = attr.ib(type=str)
+    cTag = attr.ib(type=str)
 
 
+@attr.s(slots=True, hash=True)
 class DelFile(Operation):
-    id = Field(str, True, None)
+    id = attr.ib(type=str)
 
-    def human_readable_string(self) -> str:
+    def __str__(self) -> str:
         return 'Remove file with id {id}'.format(id=self.id)
 
 
+@attr.s(slots=True, hash=True)
 class ModifyFile(Operation):
-    id = Field(str, True, None)
-    size = Field(int, True, 0)
+    id = attr.ib(type=str)
+    size = attr.ib(type=int)
 
-    def human_readable_string(self) -> str:
+    def __str__(self) -> str:
         return 'Override the content of the file with id {id}'.format(id=self.id)
 
 
+@attr.s(slots=True, hash=True)
 class ModifyCloudFile(ModifyFile):
-    eTag = Field(str, True, None)
-    cTag = Field(str, True, None)
+    eTag = attr.ib(type=str)
+    cTag = attr.ib(type=str)
 
 
+@attr.s(slots=True, hash=True)
 class RenameMoveFile(Operation):
-    id = Field(str, True, None)
-    name = Field(str, True, None)
-    destination_id = Field(str, True, None)
+    id = attr.ib(type=str)
+    name = attr.ib(type=str)
+    destination_id = attr.ib(type=str)
 
-    def human_readable_string(self) -> str:
+    def __str__(self) -> str:
         if self.name is None:
             return 'Move file {id} to directory with id {destination_id}'.format(
                 id=self.id,
@@ -207,12 +212,13 @@ class RenameMoveFile(Operation):
         )
 
 
+@attr.s(slots=True, hash=True)
 class AddDir(Operation):
-    parent_id = Field(str, True, None)
-    child_id = Field(str, True, None)
-    name = Field(str, True, None)
+    parent_id = attr.ib(type=str)
+    child_id = attr.ib(type=str)
+    name = attr.ib(type=str)
 
-    def human_readable_string(self) -> str:
+    def __str__(self) -> str:
         return 'Create directory {name} with id {child_id} to directory with id {parent_id}'.format(
             name=self.name,
             child_id=self.child_id,
@@ -220,19 +226,21 @@ class AddDir(Operation):
         )
 
 
+@attr.s(slots=True, hash=True)
 class DelDir(Operation):
-    id = Field(str, True, None)
+    id = attr.ib(type=str)
 
-    def human_readable_string(self) -> str:
+    def __str__(self) -> str:
         return 'Remove directory with id {id}'.format(id=self.id)
 
 
+@attr.s(slots=True, hash=True)
 class RenameMoveDir(Operation):
-    id = Field(str, True, None)
-    name = Field(str, True, None)
-    destination_id = Field(str, True, None)
+    id = attr.ib(type=str)
+    name = attr.ib(type=str)
+    destination_id = attr.ib(type=str)
 
-    def human_readable_string(self) -> str:
+    def __str__(self) -> str:
         if self.name is None:
             return 'Move directory {id} to directory with id {destination_id}'.format(
                 id=self.id,

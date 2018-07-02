@@ -20,7 +20,7 @@ from pathlib import Path
 from requests.exceptions import HTTPError
 
 from .sync import sync, SyncDirection
-from .database import CONFIG, TREE_ADAPTER, CONNECTION
+from .database import CONFIG, clear_all_trees, session_scope
 
 
 def main():
@@ -67,8 +67,8 @@ def main():
             logging.info('Root id set successfully')
         else:
             del CONFIG.root_id
-        with CONNECTION:
-            TREE_ADAPTER.clear_all()
+        with session_scope() as session:
+            clear_all_trees(session)
             logging.info('Saved state reset successfully')
         return 0
 

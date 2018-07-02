@@ -15,18 +15,16 @@
 
 import os
 from collections import OrderedDict
-from pathlib import Path
-from typing import Callable, Union, Dict, BinaryIO
+from typing import Callable, Dict, BinaryIO
 
 import requests
-from requests import Session, HTTPError, RequestException
 from oauthlib.oauth2 import WebApplicationClient
+from requests import Session, HTTPError, RequestException
 from requests_oauthlib import OAuth2Session
 
-from onedrive import _compare_size
+from . import _compare_size
 from .algorithms import HASH_ENGINES
-from .database import CONFIG, TreeType, CONNECTION
-from .database import TREE_ADAPTER
+from .database import CONFIG, TreeType, load_tree, session_scope, save_tree, ConfigEntity
 from .model import Tree, CloudFile, Directory
 
 os.environ['OAUTHLIB_RELAX_TOKEN_SCOPE'] = '1'
@@ -243,13 +241,15 @@ def retrieve_delta(session: Session) -> Tree:
     items = OrderedDict()
     delta_link = getattr(CONFIG, 'delta_link', None)
 
+    # TODO: Ugly code below
     url = None
     if delta_link is not None:
         response = session.get(delta_link)
         try:
             response.raise_for_status()
             url = delta_link
-            tree = TREE_ADAPTER.load_tree(TreeType.DELTA)
+            with session_scope() as session:
+                tree = load_tree(session, TreeType.DELTA)
         except HTTPError:
             pass
 
@@ -319,8 +319,8 @@ def retrieve_delta(session: Session) -> Tree:
             response.raise_for_status()
             file.cTag = response.json()['cTag']
 
-    with CONNECTION:
-        TREE_ADAPTER.save_tree(tree, TreeType.DELTA)
-        CONFIG['delta_link'] = new_delta_link
+    with session_scope() as session:
+        save_tree(session, tree, TreeType.DELTA)
+        session.merge(ConfigEntity(key='delta_link', value=new_delta_link))
 
     return tree

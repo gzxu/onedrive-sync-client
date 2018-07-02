@@ -19,11 +19,12 @@ import itertools
 import zlib
 from collections import defaultdict
 from functools import singledispatch
-from typing import Set, Tuple, Sequence, Optional, Callable, Mapping
 from pathlib import Path
+from typing import Set, Tuple, Sequence, Optional, Callable, Mapping
+
+import attr
 
 from . import _compare_size
-from .dataclass import DataClass, Field
 from .model import Operation, AddFile, DelFile, ModifyFile, RenameMoveFile, AddDir, DelDir, RenameMoveDir, CloudFile
 from .model import Tree, check_operation, basic_operation, File, LocalFile
 
@@ -151,17 +152,21 @@ def check_same_node_operations(cloud_changes: Set[Operation], local_changes: Set
                     raise Exception('Ambiguous operations of moving one directory twice')
 
 
-class Condition(DataClass):
+# Logically this class is immutable, but frozen=True is inefficient for slots=True, so hash=True is necessary
+@attr.s(slots=True, hash=True)
+class Condition:
     pass
 
 
+@attr.s(slots=True, hash=True)
 class DirectoryExists(Condition):
-    id = Field(str, True, None)
+    id = attr.ib(type=str)
 
 
+@attr.s(slots=True, hash=True)
 class NameReleased(Condition):
-    parent_id = Field(str, True, None)
-    name = Field(str, True, None)
+    parent_id = attr.ib(type=str)
+    name = attr.ib(type=str)
 
 
 @singledispatch
@@ -315,7 +320,7 @@ def field_test(tree: Tree, script: Sequence[Operation]) -> Tree:
         if check_operation(line, field):
             basic_operation(line, field)
         else:
-            raise Exception('Failed in testing operation ' + line.human_readable_string())
+            raise Exception('Failed in testing operation ' + repr(line))
         pass
     return field
 
