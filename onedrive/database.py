@@ -91,7 +91,7 @@ class Config:
         with session_scope() as session:
             result = session.query(ConfigEntity).get(item)
             if result is None:
-                raise IndexError()
+                raise AttributeError()
             else:
                 return result.value
 
